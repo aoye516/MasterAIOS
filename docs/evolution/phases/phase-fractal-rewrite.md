@@ -41,7 +41,7 @@
 
 ### 沿用（不动）
 - PostgreSQL schema (`scripts/init_db.sql`，已对齐生产)
-- `config/persona.md`（小丙人设）
+- `config/persona.md`（Master 人设种子）
 - `.env`（DATABASE_URL / SILICONFLOW_API_KEY / FEISHU_*）
 - `scripts/`（DB init / backup / restore 脚本）
 

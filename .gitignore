@@ -105,3 +105,6 @@ vendor/nanobot/*.egg-info/
 
 # Python venv
 .venv/
+
+# Local-only persona backups (private SOUL.md / USER.md versions etc.)
+.local-backup/

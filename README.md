@@ -10,7 +10,7 @@
 
 ## 0. 你只需要看这一段
 
-- **入口**：飞书 → nanobot Master Agent（小丙）
+- **入口**：飞书 → nanobot Master Agent
 - **决策树**：单步问题 master 直接答；多步生活管理 → spawn 内部 sub-agent (LifeManager)；写代码 → 调外部 sub-agent (`aios code-helper` → claude CLI)
 - **内核**：[`vendor/nanobot/`](vendor/nanobot/) 是 git submodule（Fork + Vendor 模式）。上游升级见 [`docs/upgrade-from-upstream.md`](docs/upgrade-from-upstream.md)
 - **AIOS 自己写的**：`workspace/`（nanobot 配置 + skills）+ `aios/`（PG 桥 + Claude CLI 桥的 Python 薄层）+ `deploy/`（systemd unit + 脚本）
@@ -28,7 +28,7 @@
                              │ lark-oapi
                              ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│              nanobot Master Agent  (小丙 = SOUL.md)                  │
+│              nanobot Master Agent  (Master = SOUL.md)                │
 │  ─────────────────────────────────────────────────────────────────   │
 │  • 接收用户消息，决定是自己回 / spawn 子代理 / 调外部 Claude          │
 │  • 维护 SessionContext（短期对话 + Dream 两阶段记忆）                │
@@ -62,7 +62,7 @@ AIOS/
 ├── vendor/nanobot/          # git submodule → HKUDS/nanobot（或 fork）
 ├── workspace/               # nanobot 工作区
 │   ├── config.json          # provider / channel / 工具开关
-│   ├── SOUL.md              # 小丙人格 + Fractal 决策树
+│   ├── SOUL.md              # Master 人格 + Fractal 决策树（可本地个性化）
 │   ├── USER.md              # 用户画像（Dream 自动维护）
 │   ├── memory/MEMORY.md     # 长期记忆种子
 │   └── skills/              # AIOS 自定义 skills
@@ -196,14 +196,40 @@ bash deploy/deploy.sh
 
 ---
 
-## 6. 文档导航
+## 6. 个性化你的 Master
+
+仓库里 [`workspace/SOUL.md`](workspace/SOUL.md) 是一个**通用模板**（人设叫 Master）。如果你想给自己的 Master 起名字、改口吻、加私人偏好：
+
+```bash
+# 1. 编辑成你想要的样子（改名字、改口吻、加你的私人指令）
+vim workspace/SOUL.md
+vim workspace/USER.md
+
+# 2. 把本地修改对 git 隐身，避免每次 git status 都显示 modified
+#    也避免不小心 commit 把你的私人人格 push 到公开仓库
+git update-index --skip-worktree workspace/SOUL.md workspace/USER.md
+
+# 3. 本地 / 服务器照常使用，nanobot 会读你这个本地版本
+```
+
+恢复跟踪（想升级模板时）：
+
+```bash
+git update-index --no-skip-worktree workspace/SOUL.md workspace/USER.md
+```
+
+`deploy.sh` 默认**排除** `workspace/SOUL.md` / `workspace/USER.md` / `workspace/memory/MEMORY.md`，所以服务器上的私人人设不会被本地推送覆盖。
+
+---
+
+## 7. 文档导航
 
 | 文档 | 用途 |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | 系统架构、Master ↔ Sub-Agent 模型 |
 | [`docs/upgrade-from-upstream.md`](docs/upgrade-from-upstream.md) | nanobot 上游升级 SOP |
 | [`docs/evolution/phases/phase-fractal-rewrite.md`](docs/evolution/phases/phase-fractal-rewrite.md) | 本次重写的设计决策与历史 |
-| [`workspace/SOUL.md`](workspace/SOUL.md) | 小丙人格 + Fractal 决策树 |
+| [`workspace/SOUL.md`](workspace/SOUL.md) | Master 人格 + Fractal 决策树（可本地个性化） |
 | [`workspace/skills/life_manager/SKILL.md`](workspace/skills/life_manager/SKILL.md) | 内部 sub-agent 角色模板 |
 | [`workspace/skills/code_helper/SKILL.md`](workspace/skills/code_helper/SKILL.md) | 外部 sub-agent (Claude CLI) 用法 |
 | [`workspace/skills/pg_archive_search/SKILL.md`](workspace/skills/pg_archive_search/SKILL.md) | 长期记忆混合检索 |
@@ -212,6 +238,6 @@ bash deploy/deploy.sh
 
 ---
 
-## 7. License
+## 8. License
 
 MIT

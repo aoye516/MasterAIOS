@@ -9,6 +9,7 @@
 # 设计要点（吸取 P0 数据丢失教训）：
 #   - 不带 --delete：永远不删服务器上不在本地的文件
 #   - 排除 .env / .venv / vendor/nanobot 的本地构建产物 / sessions / memory
+#   - 排除 workspace/SOUL.md / USER.md：服务器上的私人人设不被本地版本覆盖
 #   - vendor/nanobot 走 git submodule（服务器自己 update）
 #   - 开始前打印将要做的事并要求回车确认
 #
@@ -53,6 +54,8 @@ case "$MODE" in
       --exclude='workspace/memory/' \
       --exclude='workspace/.cache/' \
       --exclude='workspace/.runtime/' \
+      --exclude='workspace/SOUL.md' \
+      --exclude='workspace/USER.md' \
       --exclude='vendor/nanobot/build/' \
       --exclude='vendor/nanobot/dist/' \
       --exclude='vendor/nanobot/*.egg-info/' \
