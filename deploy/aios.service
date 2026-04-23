@@ -1,0 +1,42 @@
+[Unit]
+Description=AIOS — Native AI OS (nanobot gateway)
+Documentation=https://github.com/aoye516/AIOS
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/claude/aios
+EnvironmentFile=/claude/aios/.env
+# 让 nanobot 的 exec 工具能找到 venv 里的 python / aios / claude
+Environment="AIOS_HOME=/claude/aios"
+Environment="AIOS_PATH_APPEND=/claude/aios/.venv/bin"
+Environment="PATH=/claude/aios/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+# Node 18+ 全局 bin 目录（claude CLI 装在这里）
+Environment="NODE_PATH=/usr/lib/node_modules"
+
+ExecStart=/claude/aios/.venv/bin/nanobot gateway \
+  --config /claude/aios/workspace/config.json \
+  --workspace /claude/aios/workspace
+
+Restart=on-failure
+RestartSec=5s
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+# 日志走 journald；用 `journalctl -u aios -f` 看
+StandardOutput=journal
+StandardError=journal
+
+# 资源限制
+LimitNOFILE=65536
+
+# 安全收紧（不影响功能的范围内）
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
