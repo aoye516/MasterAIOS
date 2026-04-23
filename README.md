@@ -1,6 +1,8 @@
 # AIOS — Native AI OS (Fractal Nanobot Edition)
 
-> 个人 AI 操作系统。以 [HKUDS/nanobot](https://github.com/HKUDS/nanobot) 为内核，通过飞书提供统一对话入口，背后跑「内部 sub-agent + 外部 sub-agent」的分形协作架构。
+**Language / 语言**: **English** · [简体中文](README.zh-CN.md)
+
+> A personal AI operating system. Built on [HKUDS/nanobot](https://github.com/HKUDS/nanobot) as the kernel, accessed through Feishu (Lark) as the unified conversational entry point, with a fractal "internal sub-agent + external sub-agent" collaboration architecture underneath.
 
 ![Status](https://img.shields.io/badge/version-1.0.0--fractal-blue)
 ![Python](https://img.shields.io/badge/python-3.12-green)
@@ -8,78 +10,80 @@
 
 ---
 
-## 0. 你只需要看这一段
+## 0. TL;DR
 
-- **入口**：飞书 → nanobot Master Agent
-- **决策树**：单步问题 master 直接答；多步生活管理 → spawn 内部 sub-agent (LifeManager)；写代码 → 调外部 sub-agent (`aios code-helper` → claude CLI)
-- **内核**：[`vendor/nanobot/`](vendor/nanobot/) 是 git submodule（Fork + Vendor 模式）。上游升级见 [`docs/upgrade-from-upstream.md`](docs/upgrade-from-upstream.md)
-- **AIOS 自己写的**：`workspace/`（nanobot 配置 + skills）+ `aios/`（PG 桥 + Claude CLI 桥的 Python 薄层）+ `deploy/`（systemd unit + 脚本）
+- **Entry point**: Feishu → nanobot Master Agent
+- **Decision tree**: single-step questions → Master answers directly; multi-step life management → spawn an internal sub-agent (LifeManager); coding tasks → call an external sub-agent (`aios code-helper` → `claude` CLI)
+- **Kernel**: [`vendor/nanobot/`](vendor/nanobot/) is a git submodule (Fork + Vendor model). Upstream upgrade SOP: [`docs/upgrade-from-upstream.md`](docs/upgrade-from-upstream.md)
+- **AIOS-specific code**: `workspace/` (nanobot config + skills) + `aios/` (thin Python layer bridging PostgreSQL and the Claude CLI) + `deploy/` (systemd unit + scripts)
 
-旧的 v0.x（自研 Master + Agents + Channels）已归档到 [`legacy/`](legacy/)，仅作历史参考。
+The legacy v0.x stack (custom Master + Agents + Channels) has been archived to [`legacy/`](legacy/) for historical reference only.
 
 ---
 
-## 1. 架构总览
+## 1. Architecture Overview
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                        飞书 / WS / Webhook                          │
+│                    Feishu / WebSocket / Webhook                     │
 └────────────────────────────┬─────────────────────────────────────────┘
                              │ lark-oapi
                              ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │              nanobot Master Agent  (Master = SOUL.md)                │
 │  ─────────────────────────────────────────────────────────────────   │
-│  • 接收用户消息，决定是自己回 / spawn 子代理 / 调外部 Claude          │
-│  • 维护 SessionContext（短期对话 + Dream 两阶段记忆）                │
-│  • 所有发给用户的话都从这里出（铁律）                                │
+│  • Receives user messages, decides: answer directly / spawn sub-agent│
+│    / delegate to external Claude                                     │
+│  • Maintains SessionContext (short-term dialog + Dream two-stage     │
+│    memory)                                                           │
+│  • Every reply to the user comes from here (hard rule)               │
 └──────┬────────────────────────┬──────────────────────────┬──────────┘
-       │ spawn (内置)           │ exec → aios CLI          │ 内置 cron / read /
-       ▼                        ▼                          │ web_search 等
-┌──────────────────┐  ┌─────────────────────┐              │
-│ 内部 sub-agent    │  │ aios code-helper    │              │
-│ (LifeManager)    │  │ → claude CLI 子进程 │              │
-│ 同进程后台 task   │  │ 独立 LLM (Claude)   │              │
-│ 同 LLM provider  │  │ 独立 session.jsonl  │              │
-│ 全套 nanobot 工具 │  │ stream-json 增量    │              │
+       │ spawn (built-in)       │ exec → aios CLI          │ built-in
+       ▼                        ▼                          │ cron / read /
+┌──────────────────┐  ┌─────────────────────┐              │ web_search …
+│ Internal subagent│  │ aios code-helper    │              │
+│ (LifeManager)    │  │ → claude CLI subproc│              │
+│ Same process     │  │ Independent LLM     │              │
+│ Same LLM provider│  │ Independent session │              │
+│ Full nanobot kit │  │ stream-json output  │              │
 └──────────────────┘  └─────────────────────┘              │
                                                            ▼
                               ┌─────────────────────────────────────┐
                               │   PostgreSQL 16 + pgvector          │
                               │   archival_memory(vector(1024))      │
-                              │   通过 aios archive-search 检索      │
+                              │   queried via aios archive-search    │
                               └─────────────────────────────────────┘
 ```
 
-完整架构见 [`docs/architecture.md`](docs/architecture.md)。
+Full architecture: [`docs/architecture.md`](docs/architecture.md).
 
 ---
 
-## 2. 目录结构
+## 2. Repository Layout
 
 ```
 AIOS/
-├── vendor/nanobot/          # git submodule → HKUDS/nanobot（或 fork）
-├── workspace/               # nanobot 工作区
-│   ├── config.json          # provider / channel / 工具开关
-│   ├── SOUL.md              # Master 人格 + Fractal 决策树（可本地个性化）
-│   ├── USER.md              # 用户画像（Dream 自动维护）
-│   ├── memory/MEMORY.md     # 长期记忆种子
-│   └── skills/              # AIOS 自定义 skills
+├── vendor/nanobot/          # git submodule → HKUDS/nanobot (or your fork)
+├── workspace/               # nanobot workspace
+│   ├── config.json          # provider / channel / tool toggles
+│   ├── SOUL.md              # Master persona + Fractal decision tree (locally customizable)
+│   ├── USER.md              # User profile (auto-maintained by Dream)
+│   ├── memory/MEMORY.md     # Long-term memory seed
+│   └── skills/              # AIOS custom skills
 │       ├── pg_archive_search/
 │       ├── code_helper/
-│       └── life_manager/    # 内部 sub-agent 角色模板
-├── aios/                    # AIOS 差异化 Python 包
-│   ├── pg/                  # asyncpg + pgvector 桥
-│   ├── acp/                 # claude CLI 桥（stream-json）
-│   └── cli.py               # 统一 CLI: aios archive-search / code-helper / db-ping
-├── deploy/                  # 服务器部署
+│       └── life_manager/    # Internal sub-agent role template
+├── aios/                    # AIOS-specific Python package
+│   ├── pg/                  # asyncpg + pgvector bridge
+│   ├── acp/                 # claude CLI bridge (stream-json)
+│   └── cli.py               # Unified CLI: aios archive-search / code-helper / db-ping
+├── deploy/                  # Server deployment
 │   ├── aios.service         # systemd unit
-│   ├── server_setup.sh      # 一次性初始化
-│   └── deploy.sh            # 本地一键 rsync + 远程 restart
-├── scripts/                 # DB init / 备份 / 本地 launcher
-├── tests/                   # AIOS 单测（aios.* 包）
-├── legacy/                  # 旧 v0.x 全部归档（app/ run_ws.py admin-web/）
+│   ├── server_setup.sh      # one-shot server bootstrap
+│   └── deploy.sh            # local one-click rsync + remote restart
+├── scripts/                 # DB init / backup / local launcher
+├── tests/                   # AIOS unit tests (aios.* package)
+├── legacy/                  # Archived v0.x (app/, run_ws.py, admin-web/)
 ├── docs/
 │   ├── architecture.md
 │   ├── upgrade-from-upstream.md
@@ -89,58 +93,58 @@ AIOS/
 
 ---
 
-## 3. 快速开始（本地）
+## 3. Quick Start (Local)
 
-### 3.1 准备
+### 3.1 Prerequisites
 
 - macOS / Linux
-- Python 3.12（uv 自带管理）
-- Node.js 18+（给 `claude` CLI）
-- PostgreSQL 16 + pgvector（数据库名 `aios`，参见 [`scripts/init_db.sql`](scripts/init_db.sql)）
-- `.env`（不入库）：
+- Python 3.12 (managed via uv)
+- Node.js 18+ (required by the `claude` CLI)
+- PostgreSQL 16 + pgvector (database name `aios`, see [`scripts/init_db.sql`](scripts/init_db.sql))
+- `.env` (not tracked):
   ```
   DATABASE_URL=postgresql://<user>@localhost:5432/aios
   SILICONFLOW_API_KEY=sk-...
   FEISHU_APP_ID=cli_...
   FEISHU_APP_SECRET=...
-  ANTHROPIC_API_KEY=...     # 可选：code_helper 用
+  ANTHROPIC_API_KEY=...     # optional: required by code_helper
   ```
 
-### 3.2 安装
+### 3.2 Install
 
 ```bash
 git clone <this-repo> AIOS && cd AIOS
 git submodule update --init --recursive
 
-# 装 uv（如未装）
+# Install uv if needed
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 创建虚拟环境 + editable 安装
+# Create venv + editable installs
 uv venv .venv --python 3.12
 source .venv/bin/activate
 uv pip install -e vendor/nanobot
 uv pip install -e .
 
-# 装 claude CLI（可选，给 code_helper 用）
+# Install the claude CLI (optional, used by code_helper)
 npm install -g @anthropic-ai/claude-code
 ```
 
-### 3.3 跑
+### 3.3 Run
 
 ```bash
-# 单条消息冒烟
-bash scripts/run_nanobot.sh agent -m "你好"
+# One-shot smoke test
+bash scripts/run_nanobot.sh agent -m "hello"
 
-# 长跑 gateway（监听飞书）
+# Long-running gateway (listens for Feishu)
 bash scripts/run_nanobot.sh gateway
 
-# CLI 直接用 AIOS 工具
+# Use AIOS tools directly from the CLI
 aios db-ping
-aios archive-search "nanobot 集成" -k 5
+aios archive-search "nanobot integration" -k 5
 aios code-helper --task hello "say hi in one line"
 ```
 
-### 3.4 测
+### 3.4 Test
 
 ```bash
 pytest tests/
@@ -148,37 +152,37 @@ pytest tests/
 
 ---
 
-## 4. 服务器部署
+## 4. Server Deployment
 
-### 4.1 一次性初始化（在服务器上执行）
+### 4.1 One-time bootstrap (run on the server)
 
 ```bash
 ssh root@<server>
 cd /claude/aios
 bash deploy/server_setup.sh
-# 然后按提示：
+# Then follow the prompts:
 systemctl enable aios
 systemctl start aios
 journalctl -u aios -f
 ```
 
-### 4.2 日常更新（在本地执行）
+### 4.2 Day-to-day updates (run locally)
 
 ```bash
-# dry-run 看会传什么
+# dry-run to preview which files will be transferred
 bash deploy/deploy.sh dry
 
-# 真传
+# actually deploy
 bash deploy/deploy.sh
 ```
 
-`deploy.sh` 做三件事：rsync（无 `--delete`）→ 远程 `git submodule update + uv pip install -e` → `systemctl restart aios`。
+`deploy.sh` does three things: rsync (no `--delete`) → remote `git submodule update + uv pip install -e` → `systemctl restart aios`.
 
-详细规范（包括「禁止 ssh 自动部署到生产前先确认」等纪律）见 [`CLAUDE.md`](CLAUDE.md) 第 8 节。
+Detailed conventions (including "always confirm before any auto-ssh deploys to prod") live in [`CLAUDE.md`](CLAUDE.md) §8.
 
 ---
 
-## 5. 上游 nanobot 升级
+## 5. Upgrading the upstream nanobot
 
 ```bash
 cd vendor/nanobot
@@ -192,49 +196,49 @@ pytest tests/
 bash deploy/deploy.sh
 ```
 
-完整 SOP（含 fork 配置、回滚、何时打 `[AIOS-PATCH]`）见 [`docs/upgrade-from-upstream.md`](docs/upgrade-from-upstream.md)。
+Full SOP (fork setup, rollback, when to tag `[AIOS-PATCH]`): [`docs/upgrade-from-upstream.md`](docs/upgrade-from-upstream.md).
 
 ---
 
-## 6. 个性化你的 Master
+## 6. Personalizing your Master
 
-仓库里 [`workspace/SOUL.md`](workspace/SOUL.md) 是一个**通用模板**（人设叫 Master）。如果你想给自己的 Master 起名字、改口吻、加私人偏好：
+The repo ships [`workspace/SOUL.md`](workspace/SOUL.md) as a **generic template** (the persona is named "Master"). To give your Master its own name, voice, or private preferences:
 
 ```bash
-# 1. 编辑成你想要的样子（改名字、改口吻、加你的私人指令）
+# 1. Edit it however you want (rename, change tone, add private instructions)
 vim workspace/SOUL.md
 vim workspace/USER.md
 
-# 2. 把本地修改对 git 隐身，避免每次 git status 都显示 modified
-#    也避免不小心 commit 把你的私人人格 push 到公开仓库
+# 2. Hide your local edits from git so `git status` stays clean
+#    and you never accidentally commit your private persona to a public repo
 git update-index --skip-worktree workspace/SOUL.md workspace/USER.md
 
-# 3. 本地 / 服务器照常使用，nanobot 会读你这个本地版本
+# 3. Use locally / on the server normally — nanobot reads your local version
 ```
 
-恢复跟踪（想升级模板时）：
+Restore tracking (e.g. when you want to pull template updates):
 
 ```bash
 git update-index --no-skip-worktree workspace/SOUL.md workspace/USER.md
 ```
 
-`deploy.sh` 默认**排除** `workspace/SOUL.md` / `workspace/USER.md` / `workspace/memory/MEMORY.md`，所以服务器上的私人人设不会被本地推送覆盖。
+`deploy.sh` already **excludes** `workspace/SOUL.md` / `workspace/USER.md` / `workspace/memory/MEMORY.md`, so the private persona on the server will not be overwritten by local pushes.
 
 ---
 
-## 7. 文档导航
+## 7. Documentation Map
 
-| 文档 | 用途 |
+| Document | Purpose |
 |---|---|
-| [`docs/architecture.md`](docs/architecture.md) | 系统架构、Master ↔ Sub-Agent 模型 |
-| [`docs/upgrade-from-upstream.md`](docs/upgrade-from-upstream.md) | nanobot 上游升级 SOP |
-| [`docs/evolution/phases/phase-fractal-rewrite.md`](docs/evolution/phases/phase-fractal-rewrite.md) | 本次重写的设计决策与历史 |
-| [`workspace/SOUL.md`](workspace/SOUL.md) | Master 人格 + Fractal 决策树（可本地个性化） |
-| [`workspace/skills/life_manager/SKILL.md`](workspace/skills/life_manager/SKILL.md) | 内部 sub-agent 角色模板 |
-| [`workspace/skills/code_helper/SKILL.md`](workspace/skills/code_helper/SKILL.md) | 外部 sub-agent (Claude CLI) 用法 |
-| [`workspace/skills/pg_archive_search/SKILL.md`](workspace/skills/pg_archive_search/SKILL.md) | 长期记忆混合检索 |
-| [`legacy/README.md`](legacy/README.md) | 旧 v0.x 代码归档说明 |
-| [`CLAUDE.md`](CLAUDE.md) | AI 编码行为规范（部署纪律、敏感信息管理） |
+| [`docs/architecture.md`](docs/architecture.md) | System architecture, Master ↔ Sub-Agent model |
+| [`docs/upgrade-from-upstream.md`](docs/upgrade-from-upstream.md) | nanobot upstream upgrade SOP |
+| [`docs/evolution/phases/phase-fractal-rewrite.md`](docs/evolution/phases/phase-fractal-rewrite.md) | Design decisions and history of this rewrite |
+| [`workspace/SOUL.md`](workspace/SOUL.md) | Master persona + Fractal decision tree (locally customizable) |
+| [`workspace/skills/life_manager/SKILL.md`](workspace/skills/life_manager/SKILL.md) | Internal sub-agent role template |
+| [`workspace/skills/code_helper/SKILL.md`](workspace/skills/code_helper/SKILL.md) | External sub-agent (Claude CLI) usage |
+| [`workspace/skills/pg_archive_search/SKILL.md`](workspace/skills/pg_archive_search/SKILL.md) | Long-term memory hybrid search |
+| [`legacy/README.md`](legacy/README.md) | Notes on archived v0.x code |
+| [`CLAUDE.md`](CLAUDE.md) | AI coding conventions (deployment discipline, secrets handling) |
 
 ---
 
