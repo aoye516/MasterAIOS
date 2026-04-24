@@ -1,0 +1,15 @@
+{"query": "今天北京天气怎么样", "routed_to": "toolbox", "rationale": "weather query"}
+{"query": "公司现在天气", "routed_to": "toolbox", "rationale": "weather + place alias"}
+{"query": "未来几天上海有雨吗", "routed_to": "toolbox", "rationale": "weather forecast"}
+{"query": "回家堵不堵", "routed_to": "toolbox", "rationale": "route + traffic"}
+{"query": "从家到公司开车要多久", "routed_to": "toolbox", "rationale": "driving route eta"}
+{"query": "中关村大街现在堵吗", "routed_to": "toolbox", "rationale": "named road traffic"}
+{"query": "我家附近有什么咖啡馆", "routed_to": "toolbox", "rationale": "poi nearby"}
+{"query": "望京 SOHO 在哪", "routed_to": "toolbox", "rationale": "geocode address"}
+{"query": "把这个坐标 116.48,39.99 转成地址", "routed_to": "toolbox", "rationale": "regeocode"}
+{"query": "把我家记一下，地址是 xxx", "routed_to": "toolbox", "rationale": "where-add place alias"}
+{"query": "我有哪些常用地点", "routed_to": "toolbox", "rationale": "where-list"}
+{"query": "算一下 1024 乘以 0.85 加 12", "routed_to": "toolbox", "rationale": "calculator"}
+{"query": "70 公斤是多少磅", "routed_to": "toolbox", "rationale": "unit conversion"}
+{"query": "纽约现在几点", "routed_to": "toolbox", "rationale": "timezone"}
+{"query": "明天下午 3 点北京时间，是纽约几点", "routed_to": "toolbox", "rationale": "timezone convert"}

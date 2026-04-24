@@ -1,0 +1,35 @@
+{"query": "北京今天天气", "expected": "toolbox"}
+{"query": "上海明天会下雨吗", "expected": "toolbox"}
+{"query": "公司现在多少度", "expected": "toolbox"}
+{"query": "家这边天气怎么样", "expected": "toolbox"}
+{"query": "周末出去野餐天气合适吗", "expected": "toolbox"}
+{"query": "回家路上堵不堵", "expected": "toolbox"}
+{"query": "从家开车到机场多久", "expected": "toolbox"}
+{"query": "现在去公司走哪条路最快", "expected": "toolbox"}
+{"query": "三环现在堵吗", "expected": "toolbox"}
+{"query": "南北高架现在路况", "expected": "toolbox"}
+{"query": "附近的加油站", "expected": "toolbox"}
+{"query": "公司楼下有什么吃的", "expected": "toolbox"}
+{"query": "国贸附近有星巴克吗", "expected": "toolbox"}
+{"query": "朝阳门外大街 6 号 在哪", "expected": "toolbox"}
+{"query": "把 116.481,39.99 解析成地址", "expected": "toolbox"}
+{"query": "我家地址是 北京市朝阳区xxx，记一下", "expected": "toolbox"}
+{"query": "把公司也加进来，地址 国贸 SOHO 5 号楼", "expected": "toolbox"}
+{"query": "我有多少个常用地点", "expected": "toolbox"}
+{"query": "把『健身房』删了", "expected": "toolbox"}
+{"query": "算一下 (1024+512)*0.85", "expected": "toolbox"}
+{"query": "150 除以 7 等于几", "expected": "toolbox"}
+{"query": "12 英尺是多少米", "expected": "toolbox"}
+{"query": "100 华氏度是多少摄氏度", "expected": "toolbox"}
+{"query": "5 公里每小时 是多少 米每秒", "expected": "toolbox"}
+{"query": "纽约现在几点", "expected": "toolbox"}
+{"query": "伦敦比北京时间晚几个小时", "expected": "toolbox"}
+{"query": "明早 9 点北京是东京几点", "expected": "toolbox"}
+{"query": "今晚 7 点提醒我去跑步", "expected": "self", "rationale": "用 nanobot 内置 cron，不是 toolbox"}
+{"query": "明天早上 8 点叫我起床", "expected": "self", "rationale": "cron 提醒"}
+{"query": "今天午饭花了 33 元", "expected": "steward"}
+{"query": "我想看《拯救计划》", "expected": "mindscape"}
+{"query": "记一下今天有个想法", "expected": "mindscape"}
+{"query": "我护照在哪", "expected": "steward"}
+{"query": "本月外卖花了多少", "expected": "steward"}
+{"query": "你好啊", "expected": "self"}

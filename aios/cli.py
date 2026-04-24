@@ -37,6 +37,7 @@ from dotenv import load_dotenv
 
 from aios.mindscape import cli as mindscape_cli
 from aios.steward import cli as steward_cli
+from aios.toolbox import cli as toolbox_cli
 
 
 def _load_env() -> None:
@@ -399,6 +400,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     steward_cli.add_subparsers(sub)
     mindscape_cli.add_subparsers(sub)
+    toolbox_cli.add_subparsers(sub)
 
     return parser
 
@@ -416,6 +418,7 @@ def main(argv: list[str] | None = None) -> int:
         "scaffold-agent": _cmd_scaffold_agent,
         "steward": steward_cli.dispatch,
         "mind": mindscape_cli.dispatch,
+        "toolbox": toolbox_cli.dispatch,
     }
     handler = handlers[args.cmd]
     return asyncio.run(handler(args))
