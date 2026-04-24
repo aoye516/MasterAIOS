@@ -1,0 +1,35 @@
+{"query": "今天午饭 38 支付宝", "expected": "steward"}
+{"query": "晚上吃了顿日料 156 微信", "expected": "steward"}
+{"query": "打车 28 块", "expected": "steward"}
+{"query": "高铁票 553 元", "expected": "steward"}
+{"query": "买衣服花了 480", "expected": "steward"}
+{"query": "电费 187 块", "expected": "steward"}
+{"query": "记一下房租 4500", "expected": "steward"}
+{"query": "刚转账给妈妈 2000", "expected": "steward"}
+{"query": "工资发了 15000", "expected": "steward"}
+{"query": "信用卡还了 8500", "expected": "steward"}
+{"query": "本月外卖花了多少", "expected": "steward"}
+{"query": "三月份打车花了多少钱", "expected": "steward"}
+{"query": "上个月支出按类目汇总", "expected": "steward"}
+{"query": "看看四月报表", "expected": "steward"}
+{"query": "我支付宝余额还有多少", "expected": "steward"}
+{"query": "今天还有花钱吗", "expected": "steward"}
+{"query": "我护照放哪了", "expected": "steward"}
+{"query": "充电宝在哪", "expected": "steward"}
+{"query": "那个银色的小硬盘呢", "expected": "steward"}
+{"query": "找一下 type-c 数据线", "expected": "steward"}
+{"query": "新买的耳机放卧室床头柜", "expected": "steward"}
+{"query": "把它移到客厅电视柜", "expected": "steward"}
+{"query": "iPhone 借给同事了", "expected": "steward"}
+{"query": "登记一下 MacBook 保修到 2027 年 3 月", "expected": "steward"}
+{"query": "卧室床头柜里都有啥", "expected": "steward"}
+{"query": "客厅有什么东西", "expected": "steward"}
+{"query": "我所有保修快到期的东西", "expected": "steward"}
+{"query": "上个月买的吸尘器现在放哪", "expected": "steward"}
+{"query": "买的那个空气炸锅多少钱", "expected": "steward"}
+{"query": "那台旧 iPad 报废了", "expected": "steward"}
+{"query": "今天天气怎么样", "expected": "toolbox", "note": "negative · 不属于 steward"}
+{"query": "明天上海有雨吗", "expected": "toolbox", "note": "negative"}
+{"query": "提醒我 8 点开会", "expected": "wellbeing", "note": "negative · 提醒类"}
+{"query": "我之前说想读三体那本书", "expected": "mindscape", "note": "negative · 读书清单"}
+{"query": "帮我记一下今天有个想法 ...", "expected": "mindscape", "note": "negative · 备忘"}

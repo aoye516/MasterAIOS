@@ -35,6 +35,8 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from aios.steward import cli as steward_cli
+
 
 def _load_env() -> None:
     """Load .env from project root if present (no-op when already exported)."""
@@ -47,27 +49,10 @@ def _load_env() -> None:
 
 
 async def _embed_query(query: str) -> list[float]:
-    """Call SiliconFlow embeddings API to embed a single query string."""
-    import aiohttp
+    """Backwards-compat shim; new code should use aios.embed.embed_query directly."""
+    from aios.embed import embed_query
 
-    base = os.environ.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1").rstrip("/")
-    key = os.environ.get("SILICONFLOW_API_KEY")
-    model = os.environ.get("LLM_MODEL_EMBEDDING", "BAAI/bge-large-zh-v1.5")
-    if not key:
-        raise RuntimeError("SILICONFLOW_API_KEY not set; cannot run --embed search")
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{base}/embeddings",
-            json={"model": model, "input": [query]},
-            headers={"Authorization": f"Bearer {key}"},
-            timeout=aiohttp.ClientTimeout(total=30),
-        ) as resp:
-            if resp.status != 200:
-                body = await resp.text()
-                raise RuntimeError(f"embeddings API failed {resp.status}: {body[:200]}")
-            data = await resp.json()
-    return data["data"][0]["embedding"]
+    return await embed_query(query)
 
 
 async def _cmd_archive_search(args: argparse.Namespace) -> int:
@@ -411,6 +396,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_rct.add_argument("agent")
     p_rct.add_argument("--json", action="store_true")
 
+    steward_cli.add_subparsers(sub)
+
     return parser
 
 
@@ -425,6 +412,7 @@ def main(argv: list[str] | None = None) -> int:
         "db-ping": _cmd_db_ping,
         "route": _cmd_route,
         "scaffold-agent": _cmd_scaffold_agent,
+        "steward": steward_cli.dispatch,
     }
     handler = handlers[args.cmd]
     return asyncio.run(handler(args))

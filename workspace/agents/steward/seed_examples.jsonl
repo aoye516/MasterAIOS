@@ -1,0 +1,12 @@
+{"query": "今天午饭花了 38 块支付宝", "expected": "steward", "note": "记账·自然语言花费"}
+{"query": "刚刚地铁 5 块", "expected": "steward", "note": "记账·短句"}
+{"query": "外卖 32.5 微信", "expected": "steward", "note": "记账·账户带支付方式"}
+{"query": "工资到账 12000 招行", "expected": "steward", "note": "记账·收入"}
+{"query": "这个月外卖花了多少", "expected": "steward", "note": "聚合查询·按类目"}
+{"query": "上个月支出汇总", "expected": "steward", "note": "聚合查询·月度"}
+{"query": "我护照在哪", "expected": "steward", "note": "物品·物理位置查询"}
+{"query": "那个充电的小玩意儿放哪了", "expected": "steward", "note": "物品·语义模糊查询"}
+{"query": "充电宝放卧室床头柜抽屉 2", "expected": "steward", "note": "物品·入库 + 位置"}
+{"query": "把吸尘器移到厨房储物柜", "expected": "steward", "note": "物品·改位置"}
+{"query": "上个月买的吸尘器花了多少 现在放哪", "expected": "steward", "note": "跨域·流水 join 物品"}
+{"query": "iPhone 保修到期了吗", "expected": "steward", "note": "物品·保修日期"}
