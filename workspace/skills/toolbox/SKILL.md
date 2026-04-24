@@ -18,6 +18,8 @@ domain: utilities
 - **负责**：
   - **天气**：当前 / 4 天预报 — `aios toolbox weather <地点> [--forecast]`
   - **自驾路线**：耗时 / 距离 / 过路费 / 路况拥堵段 — `aios toolbox route <起> <终>`
+  - **公交/地铁路径**：多方案 + 换乘 + 票价 + 步行距离 — `aios toolbox transit <起> <终>`
+  - **附近地铁站**：按距离排序 — `aios toolbox metro-near <地点>`
   - **道路实时路况**：指定路名当前畅通/拥堵 — `aios toolbox traffic-road <名> <城市>`
   - **POI 搜索**：餐厅、咖啡馆、加油站、附近的 X — `aios toolbox poi <关键词> [--region]`
   - **地理编码**：地址 ↔ 经纬度 — `aios toolbox geo / regeo`
@@ -53,7 +55,9 @@ domain: utilities
 6. **不要给命令加我没列出来的参数**（比如 `--mode driving`）。argparse 会直接拒掉，浪费一次 LLM 调用。
 
 工具用途辨析（高频踩坑点）：
-- 「**回家堵不堵 / 回家路上路况**」 → 用 **`route 公司 家`**，它会算出整条路的拥堵比例 + 拥堵路段名
+- 「**回家堵不堵 / 回家路上路况**」 → 用 **`route 公司 家`**，自驾，含路况
+- 「**坐地铁回家多久 / 怎么坐地铁去 X**」 → 用 **`transit 公司 家`**，多方案 + 换乘 + 票价
+- 「**最近的地铁站 / 公司附近哪个地铁口**」 → 用 **`metro-near 公司`**
 - 「**中关村大街现在堵吗**」 → 用 **`traffic-road`**，参数是「**规范市政道路名 + 城市**」，例：`traffic-road "中关村大街" 北京`
   - ⚠️ 该接口**只认规范道路名**（中关村大街、长安街、东三环路），**不支持** 俗称（"三环"）/ 高速（"京藏高速"）/ 别名（"公司"），不在白名单的会返回 `20003`
   - 用户问"三环堵不堵"这种俗称，先想想他通常实际去哪 —— 如果是问通勤，直接用 `route 公司 家` 更准
@@ -62,7 +66,9 @@ domain: utilities
 常用 CLI：
 - aios toolbox weather 家                            # 现在天气
 - aios toolbox weather 公司 --forecast               # 4 天预报
-- aios toolbox route 家 公司                         # 耗时 + 路况
+- aios toolbox route 家 公司                         # 自驾耗时 + 路况
+- aios toolbox transit 家 公司 [--strategy 2 --top 3]  # 地铁/公交方案
+- aios toolbox metro-near 公司 [--radius 800]          # 附近地铁站
 - aios toolbox traffic-road 中关村大街 北京
 - aios toolbox poi 咖啡 --region 朝阳区 --limit 5
 - aios toolbox geo "北京市朝阳区望京 SOHO"
@@ -84,6 +90,8 @@ domain: utilities
 |---|---|---|
 | `weather` | 当前 / 4 天预报 | `place`(位置) `--forecast` |
 | `route` | 自驾路线 + 耗时 + 路况 | `origin destination`(位置) |
+| `transit` | 公交/地铁综合规划 | `origin destination` `--city --strategy --top` |
+| `metro-near` | 附近地铁站 | `place` `--radius --limit` |
 | `traffic-road` | 指定道路实时路况 | `name city`(位置) |
 | `poi` | 关键词 POI | `keywords`(位置) `--region --limit` |
 | `geo` | 地址 → 经纬度 | `address` `--city` |

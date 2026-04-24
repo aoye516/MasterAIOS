@@ -13,3 +13,7 @@
 {"query": "70 公斤是多少磅", "routed_to": "toolbox", "rationale": "unit conversion"}
 {"query": "纽约现在几点", "routed_to": "toolbox", "rationale": "timezone"}
 {"query": "明天下午 3 点北京时间，是纽约几点", "routed_to": "toolbox", "rationale": "timezone convert"}
+{"query": "从家坐地铁到公司多久", "routed_to": "toolbox", "rationale": "transit"}
+{"query": "怎么坐地铁去望京 SOHO", "routed_to": "toolbox", "rationale": "transit with address"}
+{"query": "最近的地铁站在哪", "routed_to": "toolbox", "rationale": "metro-near"}
+{"query": "公司附近的地铁口", "routed_to": "toolbox", "rationale": "metro-near alias"}

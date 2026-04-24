@@ -259,6 +259,142 @@ async def cmd_traffic_road(args: argparse.Namespace) -> int:
 
 
 # =============================================================================
+# Transit (公交 + 地铁综合规划)
+# =============================================================================
+
+# 高德 transit segments 里 status / type 的常见值
+_VEHICLE_TYPE_ZH = {
+    "BUS": "公交",
+    "SUBWAY": "地铁",
+    "METRO_RAIL": "地铁",
+    "RAILWAY": "城际铁路",
+    "TAXI": "出租车",
+}
+
+
+def _summarize_transit(transit: dict) -> dict:
+    """从一个 transit 方案里抽出关键摘要。"""
+    cost_yuan = float(transit.get("cost", 0) or 0)
+    duration_s = int(float(transit.get("duration", 0) or 0))
+    walking_m = int(float(transit.get("walking_distance", 0) or 0))
+    distance_m = int(float(transit.get("distance", 0) or 0))
+
+    # 走过的"线"序列（地铁优先标号，公交标线名）
+    lines: list[str] = []
+    transfers = 0
+    for seg in transit.get("segments", []) or []:
+        bus = seg.get("bus") or {}
+        for line in bus.get("buslines", []) or []:
+            name = line.get("name") or ""
+            vtype = line.get("type") or ""
+            label = name or _VEHICLE_TYPE_ZH.get(vtype, vtype) or "未知线路"
+            if label and (not lines or lines[-1] != label):
+                lines.append(label)
+                if len(lines) > 1:
+                    transfers += 1
+        # 城际/地铁段
+        railway = seg.get("railway") or {}
+        if railway:
+            name = railway.get("name") or "城际"
+            if not lines or lines[-1] != name:
+                lines.append(name)
+                if len(lines) > 1:
+                    transfers += 1
+
+    return {
+        "duration_s": duration_s,
+        "duration_human": _seconds_to_human(duration_s),
+        "cost_yuan": cost_yuan,
+        "walking_distance_m": walking_m,
+        "distance_m": distance_m,
+        "transfers": transfers,
+        "lines": lines,
+    }
+
+
+async def cmd_transit(args: argparse.Namespace) -> int:
+    async with PgClient() as pg, AmapClient() as amap:
+        o = await _resolve_place(pg, amap, user_id=args.user_id, place=args.origin)
+        d = await _resolve_place(pg, amap, user_id=args.user_id, place=args.destination)
+        # 城市优先用 origin 的 city，缺省北京
+        city = o.get("city") or d.get("city") or args.city or "北京"
+        cityd = d.get("city") if (d.get("city") and d.get("city") != city) else None
+        try:
+            route = await amap.transit_route(
+                o["location"], d["location"],
+                city=city, cityd=cityd,
+                strategy=args.strategy,
+            )
+        except AmapError as e:
+            payload = {"origin": o, "destination": d,
+                       "error": e.info, "infocode": e.infocode}
+            _emit(args, payload, [f"公交规划失败 [{e.infocode}] {e.info}"])
+            return 2
+
+        transits = route.get("transits", []) or []
+        if not transits:
+            _emit(args,
+                  {"origin": o, "destination": d, "transits": []},
+                  ["未找到公交/地铁方案（可能距离过近，建议步行或自驾）"])
+            return 1
+        summaries = [_summarize_transit(t) for t in transits[: args.top]]
+        payload = {
+            "origin": o,
+            "destination": d,
+            "city": city,
+            "strategy": args.strategy,
+            "count": len(summaries),
+            "transits": summaries,
+        }
+        pretty = [f"{o['name']} → {d['name']}（{city}），{len(summaries)} 个方案："]
+        for i, s in enumerate(summaries, 1):
+            line_chain = " → ".join(s["lines"]) if s["lines"] else "(全程步行)"
+            pretty.append(
+                f"  方案 {i}：{s['duration_human']}，"
+                f"{s['cost_yuan']:.1f} 元，"
+                f"换乘 {s['transfers']} 次，"
+                f"步行 {s['walking_distance_m']} m"
+            )
+            pretty.append(f"           路线：{line_chain}")
+        _emit(args, payload, pretty)
+    return 0
+
+
+# =============================================================================
+# Metro stations near
+# =============================================================================
+
+async def cmd_metro_near(args: argparse.Namespace) -> int:
+    async with PgClient() as pg, AmapClient() as amap:
+        info = await _resolve_place(pg, amap, user_id=args.user_id, place=args.place)
+        try:
+            pois = await amap.poi_around(
+                info["location"],
+                types="150500",  # 高德 POI type: 地铁站
+                radius=args.radius,
+                page_size=args.limit,
+            )
+        except AmapError as e:
+            payload = {"place": info, "error": e.info, "infocode": e.infocode}
+            _emit(args, payload, [f"地铁站查询失败 [{e.infocode}] {e.info}"])
+            return 2
+        payload = {"place": info, "radius_m": args.radius, "stations": pois}
+        if not pois:
+            _emit(args, payload,
+                  [f"{info['name']} {args.radius}m 内没有地铁站"])
+            return 0
+        pretty = [f"{info['name']} {args.radius}m 内的地铁站（{len(pois)}）："]
+        for p in pois:
+            dist = p.get("distance", "?")
+            pretty.append(
+                f"  - {p.get('name')}  约 {dist} m  "
+                f"({p.get('address', '')})"
+            )
+        _emit(args, payload, pretty)
+    return 0
+
+
+# =============================================================================
 # POI
 # =============================================================================
 
@@ -542,6 +678,26 @@ def add_subparsers(parent_sub: argparse._SubParsersAction) -> None:
     p_r.add_argument("--user-id", type=int, default=None)
     p_r.add_argument("--json", action="store_true")
 
+    # transit
+    p_t = sub.add_parser("transit", help="公交 / 地铁综合路径规划（多方案 + 换乘 + 票价）")
+    p_t.add_argument("origin", help="起点 别名 / 地址")
+    p_t.add_argument("destination", help="终点 别名 / 地址")
+    p_t.add_argument("--city", default=None,
+                     help="城市，缺省自动取起点 city（最终缺省北京）")
+    p_t.add_argument("--strategy", type=int, default=0,
+                     help="0最快 1最便宜 2最少换乘 3最少步行 5不乘地铁")
+    p_t.add_argument("--top", type=int, default=3, help="返回前 N 个方案")
+    p_t.add_argument("--user-id", type=int, default=None)
+    p_t.add_argument("--json", action="store_true")
+
+    # metro-near
+    p_mn = sub.add_parser("metro-near", help="附近的地铁站（按距离排序）")
+    p_mn.add_argument("place", help="中心点 别名 / 地址")
+    p_mn.add_argument("--radius", type=int, default=1000, help="搜索半径（米），默认 1000")
+    p_mn.add_argument("--limit", type=int, default=10)
+    p_mn.add_argument("--user-id", type=int, default=None)
+    p_mn.add_argument("--json", action="store_true")
+
     # traffic-road
     p_tr = sub.add_parser("traffic-road", help="指定道路实时路况")
     p_tr.add_argument("name", help="道路名（如 中关村大街）")
@@ -609,6 +765,8 @@ HANDLERS = {
     "ping": cmd_ping,
     "weather": cmd_weather,
     "route": cmd_route,
+    "transit": cmd_transit,
+    "metro-near": cmd_metro_near,
     "traffic-road": cmd_traffic_road,
     "poi": cmd_poi,
     "geo": cmd_geo,

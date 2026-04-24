@@ -167,6 +167,85 @@ class AmapClient:
         )
         return data.get("trafficinfo", {})
 
+    # ---------- Transit (公交 + 地铁综合规划) ----------
+
+    async def transit_route(
+        self,
+        origin: str,
+        destination: str,
+        city: str,
+        *,
+        cityd: str | None = None,
+        strategy: int = 0,
+        nightflag: int = 0,
+    ) -> dict:
+        """公交/地铁综合路径规划（v3）。
+
+        origin / destination: 'lng,lat'
+        city: 起点城市名（北京 / 上海 / 110000 都行）
+        cityd: 跨城时填终点城市；同城省略
+        strategy:
+          0  = 最快捷（默认）
+          1  = 最经济
+          2  = 最少换乘
+          3  = 最少步行
+          5  = 不乘地铁
+        nightflag: 1 = 包含夜班车
+
+        返回 route 对象；route.transits 是方案列表，
+        每个 transit.segments[] 含 walking / bus / railway 各段。
+        """
+        params: dict[str, Any] = {
+            "origin": origin,
+            "destination": destination,
+            "city": city,
+            "strategy": strategy,
+            "nightflag": nightflag,
+            "extensions": "all",
+        }
+        if cityd:
+            params["cityd"] = cityd
+        data = await self._get(
+            f"{AMAP_BASE}/direction/transit/integrated", params
+        )
+        return data.get("route", {})
+
+    # ---------- POI around (v3 'place/around') ----------
+
+    async def poi_around(
+        self,
+        location: str,
+        *,
+        keywords: str | None = None,
+        types: str | None = None,
+        radius: int = 1000,
+        sortrule: str = "distance",
+        page_size: int = 20,
+    ) -> list[dict]:
+        """周边 POI 搜索（v3）。
+
+        location: 'lng,lat' 中心点
+        types: POI type code，例：'150500'=地铁站，'150700'=公交站
+               （多类型用 '|' 分隔）
+        radius: 搜索半径（米），默认 1000，最大 50000
+        sortrule: 'distance' 按距离 / 'weight' 按权重
+
+        返回 pois 列表，每条含 name / address / location / distance（米）
+        """
+        params: dict[str, Any] = {
+            "location": location,
+            "radius": radius,
+            "sortrule": sortrule,
+            "offset": page_size,
+            "extensions": "base",
+        }
+        if keywords:
+            params["keywords"] = keywords
+        if types:
+            params["types"] = types
+        data = await self._get(f"{AMAP_BASE}/place/around", params)
+        return data.get("pois", [])
+
     # ---------- POI search (v5 'place/text') ----------
 
     async def poi_search(

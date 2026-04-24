@@ -33,3 +33,8 @@
 {"query": "我护照在哪", "expected": "steward"}
 {"query": "本月外卖花了多少", "expected": "steward"}
 {"query": "你好啊", "expected": "self"}
+{"query": "坐地铁去公司要换乘几次", "expected": "toolbox"}
+{"query": "现在打车回家便宜还是地铁", "expected": "toolbox", "rationale": "至少地铁段交给 transit；打车价格不在能力内"}
+{"query": "国贸地铁站到望京 SOHO 多远", "expected": "toolbox"}
+{"query": "我家方圆 500 米有几个地铁站", "expected": "toolbox"}
+{"query": "末班车几点", "expected": "self", "rationale": "高德 transit 不返回首末班实时数据，让 LLM 直答或建议查官方"}
