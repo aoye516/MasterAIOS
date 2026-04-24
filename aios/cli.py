@@ -35,6 +35,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from aios.mindscape import cli as mindscape_cli
 from aios.steward import cli as steward_cli
 
 
@@ -397,6 +398,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_rct.add_argument("--json", action="store_true")
 
     steward_cli.add_subparsers(sub)
+    mindscape_cli.add_subparsers(sub)
 
     return parser
 
@@ -413,6 +415,7 @@ def main(argv: list[str] | None = None) -> int:
         "route": _cmd_route,
         "scaffold-agent": _cmd_scaffold_agent,
         "steward": steward_cli.dispatch,
+        "mind": mindscape_cli.dispatch,
     }
     handler = handlers[args.cmd]
     return asyncio.run(handler(args))

@@ -1,0 +1,12 @@
+{"query": "记一下今天看到一个想法 ...", "expected": "mindscape", "note": "备忘"}
+{"query": "我想读三体", "expected": "mindscape", "note": "想读清单·书"}
+{"query": "把瞬息全宇宙加进想看清单", "expected": "mindscape", "note": "想看清单·电影"}
+{"query": "我想读的书里口碑最好的 3 本", "expected": "mindscape", "note": "watchlist 排序"}
+{"query": "我想看的电影里豆瓣 8.5 以上的", "expected": "mindscape", "note": "watchlist 过滤"}
+{"query": "上周看过哪些电影", "expected": "mindscape", "note": "watchlist 已完成"}
+{"query": "之前我想看的那本讲量子的书叫啥", "expected": "mindscape", "note": "watchlist 语义召回"}
+{"query": "我那个英语学习计划进度", "expected": "mindscape", "note": "学习计划"}
+{"query": "新建一个学习计划：每天读 30 分钟英文", "expected": "mindscape", "note": "学习计划新建"}
+{"query": "把 Pragmatic Programmer 标记为读完了，我打 9 分", "expected": "mindscape", "note": "watchlist finish"}
+{"query": "搜一下我之前关于 nanobot 架构的备忘", "expected": "mindscape", "note": "notes 搜索"}
+{"query": "想看的剧里最近加的", "expected": "mindscape", "note": "watchlist 最近"}

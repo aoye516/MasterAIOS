@@ -1,0 +1,35 @@
+{"query": "记一下：今天和 X 聊了 ...", "expected": "mindscape"}
+{"query": "随便记一句话：明天试试新的 prompt 结构", "expected": "mindscape"}
+{"query": "把这个想法存下来 — RAG 不一定要用 vector", "expected": "mindscape"}
+{"query": "我想读《三体》", "expected": "mindscape"}
+{"query": "把《活着》加进想读", "expected": "mindscape"}
+{"query": "想看《阿凡达 2》", "expected": "mindscape"}
+{"query": "把《西部世界 第四季》加进想看", "expected": "mindscape"}
+{"query": "听播客 Lex Fridman 的 Andrej 那期想加进去", "expected": "mindscape"}
+{"query": "我想读的书里评分最高的 5 本", "expected": "mindscape"}
+{"query": "我想看的电影里豆瓣 9 分以上的", "expected": "mindscape"}
+{"query": "上个月我看完了哪些书", "expected": "mindscape"}
+{"query": "我所有 doing 状态的书", "expected": "mindscape"}
+{"query": "之前想看那部讲外星章鱼的电影叫啥", "expected": "mindscape"}
+{"query": "找一下我之前想看的关于火星的纪录片", "expected": "mindscape"}
+{"query": "把《三体》标记看完，我打 9.5", "expected": "mindscape"}
+{"query": "《死亡诗社》看完了，10 分", "expected": "mindscape"}
+{"query": "《那本数学书》弃读了", "expected": "mindscape"}
+{"query": "新建学习计划：英语裸听 NPR，6 个月", "expected": "mindscape"}
+{"query": "把英语计划的第一个 milestone 标记完成", "expected": "mindscape"}
+{"query": "我的所有正在进行的学习计划", "expected": "mindscape"}
+{"query": "暂停我的法语计划", "expected": "mindscape"}
+{"query": "搜下我之前关于 system prompt 的备忘", "expected": "mindscape"}
+{"query": "我之前记过关于 nanobot 怎么 spawn 的笔记吗", "expected": "mindscape"}
+{"query": "复盘下这周看过的内容", "expected": "mindscape"}
+{"query": "我学习计划的进度怎么样", "expected": "mindscape"}
+{"query": "今天午饭花了 38 支付宝", "expected": "steward", "note": "negative · 记账"}
+{"query": "我护照在哪", "expected": "steward", "note": "negative · 物品"}
+{"query": "提醒我 8 点开会", "expected": "wellbeing", "note": "negative · 提醒"}
+{"query": "明天天气怎么样", "expected": "toolbox", "note": "negative · 天气"}
+{"query": "去公司怎么走最快", "expected": "toolbox", "note": "negative · 路线"}
+{"query": "你是谁", "expected": "self", "note": "negative · 元问题，Master 自答"}
+{"query": "现在几点", "expected": "self", "note": "negative · 极简，Master 自答"}
+{"query": "上个月吃外卖花了多少", "expected": "steward", "note": "negative · 报表"}
+{"query": "iPhone 借给同事了", "expected": "steward", "note": "negative · 物品状态"}
+{"query": "我尿酸高 不能吃啥", "expected": "wellbeing", "note": "negative · 健康"}
