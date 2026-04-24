@@ -1,13 +1,26 @@
 """`aios` CLI — single entry-point used by workspace skills.
 
 Usage:
-    aios archive-search "<query>" [--user-id N] [--limit K] [--json]
+    aios archive-search "<query>" [--user-id N] [--limit K] [--embed] [--json]
     aios code-helper --task <name> "<description>" [--timeout SEC] [--json]
     aios code-helper --list-tasks
     aios db-ping
 
+    aios route record    --query "..." --routed-to <agent> [--confidence F]
+                         [--spawn-task-id ID] [--spawn-label STR] [--intent-index N]
+                         [--user-id N] [--embed] [--json]
+    aios route finalize  --trace-id N --outcome success|reroute|failed
+                         [--duration-ms N] [--error STR]
+    aios route feedback  --task-id ID --feedback thumbs_up|thumbs_down
+    aios route examples  <agent> [--top 8] [--recent-days 30]
+                         [--min-confidence F] [--seed-fallback] [--json]
+    aios route count     <agent>
+
 The skill files in `workspace/skills/<name>/SKILL.md` teach the LLM to invoke
 this CLI through nanobot's built-in `bash` tool.
+
+`--embed` runs vector recall (SiliconFlow BAAI/bge-large-zh-v1.5, 1024-d).
+Without it, plain tsvector keyword recall is used (limited for Chinese).
 """
 
 from __future__ import annotations
@@ -33,14 +46,43 @@ def _load_env() -> None:
             return
 
 
+async def _embed_query(query: str) -> list[float]:
+    """Call SiliconFlow embeddings API to embed a single query string."""
+    import aiohttp
+
+    base = os.environ.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1").rstrip("/")
+    key = os.environ.get("SILICONFLOW_API_KEY")
+    model = os.environ.get("LLM_MODEL_EMBEDDING", "BAAI/bge-large-zh-v1.5")
+    if not key:
+        raise RuntimeError("SILICONFLOW_API_KEY not set; cannot run --embed search")
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{base}/embeddings",
+            json={"model": model, "input": [query]},
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                raise RuntimeError(f"embeddings API failed {resp.status}: {body[:200]}")
+            data = await resp.json()
+    return data["data"][0]["embedding"]
+
+
 async def _cmd_archive_search(args: argparse.Namespace) -> int:
     from aios.pg import PgClient, search_archival
+
+    embedding = None
+    if args.embed:
+        embedding = await _embed_query(args.query)
 
     async with PgClient() as pg:
         rows = await search_archival(
             pg,
             args.query,
             user_id=args.user_id,
+            embedding=embedding,
             limit=args.limit,
         )
     payload = [r.to_dict() for r in rows]
@@ -109,6 +151,172 @@ async def _cmd_code_helper(args: argparse.Namespace) -> int:
     return 0 if not result.error else 1
 
 
+async def _cmd_route_record(args: argparse.Namespace) -> int:
+    from aios.pg import PgClient
+    from aios.route.db import record_trace
+
+    embedding = None
+    if args.embed:
+        embedding = await _embed_query(args.query)
+
+    async with PgClient() as pg:
+        trace_id = await record_trace(
+            pg,
+            query=args.query,
+            routed_to=args.routed_to,
+            user_id=args.user_id,
+            spawn_label=args.spawn_label,
+            spawn_task_id=args.spawn_task_id,
+            intent_index=args.intent_index,
+            confidence=args.confidence,
+            embedding=embedding,
+        )
+    if args.json:
+        print(json.dumps({"trace_id": trace_id}, ensure_ascii=False))
+    else:
+        print(f"trace_id={trace_id}")
+    return 0
+
+
+async def _cmd_route_finalize(args: argparse.Namespace) -> int:
+    from aios.pg import PgClient
+    from aios.route.db import finalize_trace
+
+    async with PgClient() as pg:
+        ok = await finalize_trace(
+            pg,
+            trace_id=args.trace_id,
+            outcome=args.outcome,
+            duration_ms=args.duration_ms,
+            error=args.error,
+        )
+    if not ok:
+        print(f"WARN: trace_id={args.trace_id} not found", file=sys.stderr)
+        return 1
+    print("ok")
+    return 0
+
+
+async def _cmd_route_feedback(args: argparse.Namespace) -> int:
+    from aios.pg import PgClient
+    from aios.route.db import feedback_by_task
+
+    async with PgClient() as pg:
+        n = await feedback_by_task(pg, spawn_task_id=args.task_id, feedback=args.feedback)
+    if args.json:
+        print(json.dumps({"updated": n}, ensure_ascii=False))
+    else:
+        print(f"updated {n} trace(s)")
+    return 0
+
+
+async def _cmd_route_examples(args: argparse.Namespace) -> int:
+    from aios.pg import PgClient
+    from aios.route.db import count_traces, fetch_examples, load_seed_examples
+
+    async with PgClient() as pg:
+        examples = await fetch_examples(
+            pg,
+            agent_name=args.agent,
+            top=args.top,
+            recent_days=args.recent_days,
+            min_confidence=args.min_confidence,
+            require_positive_feedback=args.positive_only,
+        )
+        total = await count_traces(pg, agent_name=args.agent)
+
+    used_seed = False
+    if (len(examples) < args.top or total < args.cold_start_threshold) and args.seed_fallback:
+        seeds = load_seed_examples(args.agent)
+        existing = {e["query"] for e in examples}
+        for s in seeds:
+            q = s.get("query")
+            if q and q not in existing:
+                examples.append({
+                    "query": q,
+                    "confidence": None,
+                    "user_feedback": None,
+                    "created_at": None,
+                    "source": "seed",
+                })
+                if len(examples) >= args.top:
+                    break
+        used_seed = True
+
+    if args.json:
+        print(json.dumps(
+            {"agent": args.agent, "total_traces": total, "used_seed": used_seed,
+             "examples": examples},
+            ensure_ascii=False, indent=2,
+        ))
+    else:
+        if not examples:
+            print(f"(no examples for agent={args.agent})")
+            return 0
+        for i, ex in enumerate(examples, 1):
+            tag = " [seed]" if ex.get("source") == "seed" else ""
+            print(f"#{i}{tag} {ex['query']}")
+    return 0
+
+
+async def _cmd_route_count(args: argparse.Namespace) -> int:
+    from aios.pg import PgClient
+    from aios.route.db import count_traces
+
+    async with PgClient() as pg:
+        n = await count_traces(pg, agent_name=args.agent)
+    if args.json:
+        print(json.dumps({"agent": args.agent, "count": n}, ensure_ascii=False))
+    else:
+        print(n)
+    return 0
+
+
+async def _cmd_route(args: argparse.Namespace) -> int:
+    handlers = {
+        "record": _cmd_route_record,
+        "finalize": _cmd_route_finalize,
+        "feedback": _cmd_route_feedback,
+        "examples": _cmd_route_examples,
+        "count": _cmd_route_count,
+    }
+    return await handlers[args.route_cmd](args)
+
+
+async def _cmd_scaffold_agent(args: argparse.Namespace) -> int:
+    from aios.scaffold.agent import scaffold_agent
+
+    result = scaffold_agent(
+        args.name,
+        domain=args.domain,
+        emoji=args.emoji,
+        title=args.title,
+        description=args.description,
+        force=args.force,
+    )
+    if args.json:
+        print(json.dumps({
+            "created": [str(p) for p in result.created],
+            "skipped": [str(p) for p in result.skipped],
+            "next_steps": result.next_steps,
+        }, ensure_ascii=False, indent=2))
+        return 0
+
+    if result.created:
+        print("created:")
+        for p in result.created:
+            print(f"  + {p}")
+    if result.skipped:
+        print("skipped (use --force to overwrite):")
+        for p in result.skipped:
+            print(f"  - {p}")
+    print()
+    print("next steps:")
+    for step in result.next_steps:
+        print(f"  {step}")
+    return 0
+
+
 async def _cmd_db_ping(args: argparse.Namespace) -> int:  # noqa: ARG001
     from aios.pg import PgClient
 
@@ -132,6 +340,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_archive.add_argument("query", help="natural-language query")
     p_archive.add_argument("--user-id", type=int, default=None, help="restrict to a specific user_id")
     p_archive.add_argument("--limit", type=int, default=5)
+    p_archive.add_argument(
+        "--embed",
+        action="store_true",
+        help="vector recall via SiliconFlow embeddings (needed for Chinese)",
+    )
     p_archive.add_argument("--json", action="store_true", help="emit JSON instead of pretty text")
 
     p_helper = sub.add_parser("code-helper", help="Delegate a coding task to claude CLI")
@@ -142,6 +355,61 @@ def _build_parser() -> argparse.ArgumentParser:
     p_helper.add_argument("--json", action="store_true")
 
     sub.add_parser("db-ping", help="Verify PostgreSQL connectivity and show row counts")
+
+    p_scaf = sub.add_parser("scaffold-agent", help="Generate the four-piece skeleton for a new sub-agent")
+    p_scaf.add_argument("name", help="agent name, snake_case (e.g. steward, mindscape)")
+    p_scaf.add_argument("--domain", required=True,
+                        help="short domain tag (finance / knowledge / wellbeing / tools / contacts)")
+    p_scaf.add_argument("--emoji", default="🤖")
+    p_scaf.add_argument("--title", default=None, help="display title (defaults to Title Case of name)")
+    p_scaf.add_argument("--description", default="TODO: 一两句话写清这个代理负责的领域。",
+                        help="one-line domain description for SKILL.md frontmatter")
+    p_scaf.add_argument("--force", action="store_true", help="overwrite existing files")
+    p_scaf.add_argument("--json", action="store_true")
+
+    p_route = sub.add_parser("route", help="Tier 2 self-evolving routing memory ops")
+    route_sub = p_route.add_subparsers(dest="route_cmd", required=True)
+
+    p_rrec = route_sub.add_parser("record", help="Insert a routing trace (outcome=pending)")
+    p_rrec.add_argument("--query", required=True)
+    p_rrec.add_argument("--routed-to", required=True, help="target agent name (kebab-case)")
+    p_rrec.add_argument("--user-id", type=int, default=None)
+    p_rrec.add_argument("--spawn-label", default=None)
+    p_rrec.add_argument("--spawn-task-id", default=None)
+    p_rrec.add_argument("--intent-index", type=int, default=0)
+    p_rrec.add_argument("--confidence", type=float, default=None)
+    p_rrec.add_argument("--embed", action="store_true",
+                        help="embed query (SiliconFlow) and store in query_embedding")
+    p_rrec.add_argument("--json", action="store_true")
+
+    p_rfin = route_sub.add_parser("finalize", help="Update outcome of an existing trace")
+    p_rfin.add_argument("--trace-id", type=int, required=True)
+    p_rfin.add_argument("--outcome", required=True, choices=["success", "reroute", "failed"])
+    p_rfin.add_argument("--duration-ms", type=int, default=None)
+    p_rfin.add_argument("--error", default=None)
+
+    p_rfb = route_sub.add_parser("feedback", help="Backfill user feedback by spawn_task_id")
+    p_rfb.add_argument("--task-id", required=True, dest="task_id")
+    p_rfb.add_argument("--feedback", required=True, choices=["thumbs_up", "thumbs_down"])
+    p_rfb.add_argument("--json", action="store_true")
+
+    p_rex = route_sub.add_parser("examples", help="Fetch top recent successful traces for one agent")
+    p_rex.add_argument("agent", help="agent name (kebab-case)")
+    p_rex.add_argument("--top", type=int, default=8)
+    p_rex.add_argument("--recent-days", type=int, default=30)
+    p_rex.add_argument("--min-confidence", type=float, default=0.5)
+    p_rex.add_argument("--positive-only", action="store_true",
+                       help="only traces with user_feedback=thumbs_up")
+    p_rex.add_argument("--seed-fallback", action="store_true", default=True,
+                       help="fill from workspace/agents/<agent>/seed_examples.jsonl when sparse")
+    p_rex.add_argument("--no-seed-fallback", action="store_false", dest="seed_fallback")
+    p_rex.add_argument("--cold-start-threshold", type=int, default=50,
+                       help="if total traces < N, force seed fallback")
+    p_rex.add_argument("--json", action="store_true")
+
+    p_rct = route_sub.add_parser("count", help="Count traces routed to an agent")
+    p_rct.add_argument("agent")
+    p_rct.add_argument("--json", action="store_true")
 
     return parser
 
@@ -155,6 +423,8 @@ def main(argv: list[str] | None = None) -> int:
         "archive-search": _cmd_archive_search,
         "code-helper": _cmd_code_helper,
         "db-ping": _cmd_db_ping,
+        "route": _cmd_route,
+        "scaffold-agent": _cmd_scaffold_agent,
     }
     handler = handlers[args.cmd]
     return asyncio.run(handler(args))

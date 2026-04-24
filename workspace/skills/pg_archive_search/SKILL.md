@@ -23,35 +23,45 @@ AIOS 把"长期外部记忆"放在 PostgreSQL 的 `archival_memory` 表里（`ve
 
 ## 调用方式
 
-通过内置的 `bash` 工具调 `aios` CLI：
+通过内置的 `bash` 工具调 `aios` CLI。**中文查询永远加 `--embed`**（默认走 tsvector + 'simple' 配置，不分词，中文会查不到）：
 
 ```bash
-aios archive-search "你的查询" --limit 5
+aios archive-search "你的查询" --embed --limit 5
 ```
 
 加 JSON 输出方便结构化解析：
 
 ```bash
-aios archive-search "上次提到的服务器 IP" --limit 3 --json
+aios archive-search "上次提到的服务器 IP" --embed --limit 3 --json
 ```
 
 按用户过滤（多用户场景）：
 
 ```bash
-aios archive-search "考试日程" --user-id 1 --limit 5
+aios archive-search "考试日程" --embed --user-id 1 --limit 5
 ```
+
+不加 `--embed` 时走 tsvector 关键词召回，只对英文 / 标识符 / 短词命中率高，中文长句几乎查不到。
 
 ## 输出格式（默认 pretty）
 
 ```
-#1 id=42 created=2026-04-22T15:30:00  [score=0.6231]
+#1 id=42 created=2026-04-22T15:30:00  [score=0.2287]
   内容前 400 字符...
-  metadata: {'topic': 'deployment'}
+  metadata: {'source': 'v0.x conversations', 'source_conv_id': 60, ...}
 
 #2 ...
 ```
 
-`score` 当前是 tsvector 的 `ts_rank`（越大越相关）。如果将来加入 embedding 打分，含义会变成 cosine distance（越小越相关）—— 调用前先看 `--json` 输出里的 metadata 是哪个分支。
+`score` 含义取决于走了哪条路径：
+- `--embed` 路径：cosine distance（**越小越相关**，0.2 以下基本是强命中，0.5 以上要谨慎）
+- 默认 tsvector 路径：`ts_rank`（**越大越相关**）
+
+## v0.x 历史已经全量灌入
+
+99 条 v0.x 时代的飞书对话（2026-03-10 → 2026-04-14）已经以 `content_type='legacy_conversation'` 写入 `archival_memory`，
+`metadata.source_conv_id` 是当年 `conversations` 表里的 id，可以用 `--embed` 直接召回。
+当用户说"我以前问过你 X" / "你还记得当时 X 吗" 这种话，先用本 skill 查一下，找回原始上下文再答。
 
 ## 三条铁律
 

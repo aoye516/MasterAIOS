@@ -60,25 +60,29 @@ async def search_archival(
     if not query.strip():
         raise ValueError("query must not be empty")
 
-    where_user = "AND user_id = $2" if user_id is not None else ""
-    args: list = [query]
-    if user_id is not None:
-        args.append(user_id)
-
     if embedding is not None:
         if len(embedding) != 1024:
             raise ValueError(f"embedding must be length 1024, got {len(embedding)}")
         vec_literal = _vector_literal(embedding)
-        args.append(vec_literal)
+        args: list = [vec_literal]
+        where_user = ""
+        if user_id is not None:
+            args.append(user_id)
+            where_user = f"AND user_id = ${len(args)}"
         sql = f"""
             SELECT id, user_id, content, content_type, metadata, created_at,
-                   embedding <=> ${len(args)}::vector AS score
+                   embedding <=> $1::vector AS score
             FROM archival_memory
             WHERE embedding IS NOT NULL {where_user}
-            ORDER BY embedding <=> ${len(args)}::vector
+            ORDER BY embedding <=> $1::vector
             LIMIT {int(limit)}
         """
     else:
+        args = [query]
+        where_user = ""
+        if user_id is not None:
+            args.append(user_id)
+            where_user = f"AND user_id = ${len(args)}"
         sql = f"""
             SELECT id, user_id, content, content_type, metadata, created_at,
                    ts_rank(content_tsvector, plainto_tsquery('simple', $1)) AS score

@@ -108,3 +108,14 @@ vendor/nanobot/*.egg-info/
 
 # Local-only persona backups (private SOUL.md / USER.md versions etc.)
 .local-backup/
+
+# v0.x legacy code & artifacts kept locally for reference only
+legacy/
+config/persona.md
+requirements.txt
+docs/api_reference.md
+scripts/init_sqlite.py
+scripts/migrate_*.py
+scripts/migrate_*.sh
+scripts/fix_vector_dimension.sh
+scripts/test_memory_flush_manual.py

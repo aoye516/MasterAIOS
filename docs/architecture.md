@@ -121,7 +121,7 @@
   → 调 spawn(task=<life_manager 模板 + 用户原话>, label="LifeManager: ...")
   → SubagentManager 在后台开 task，分配同 provider/model + 全套内置工具
   → sub-agent 自主：
-       - exec "aios archive-search '日程' -k 5"
+       - exec "aios archive-search '日程' --limit 5"
        - 整理冲突
        - 输出结构化总结 + 推荐 cron 操作
   → 返回 final 给 Master
@@ -205,7 +205,7 @@ CREATE INDEX ON archival_memory USING gin(tsv);
 | 子命令 | 用途 |
 |---|---|
 | `aios db-ping` | 连通性检查 |
-| `aios archive-search "<q>" [-k N] [--json]` | 长期记忆混合检索 |
+| `aios archive-search "<q>" [--limit N] [--json]` | 长期记忆混合检索 |
 | `aios code-helper --task <name> "<desc>" [--json]` | 调外部 Claude Code |
 
 CLI 实现见 [`aios/cli.py`](../aios/cli.py)。每个子命令有对应 `workspace/skills/<name>/SKILL.md` 教 LLM 何时/怎么用。

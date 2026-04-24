@@ -138,7 +138,7 @@ bash scripts/run_nanobot.sh gateway
 
 # CLI 直接用 AIOS 工具
 aios db-ping
-aios archive-search "nanobot 集成" -k 5
+aios archive-search "nanobot 集成" --limit 5
 aios code-helper --task hello "say hi in one line"
 ```
 
