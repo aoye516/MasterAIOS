@@ -119,24 +119,30 @@ class AmapClient:
         origin: str,
         destination: str,
         *,
-        strategy: int = 32,
-        show_fields: str = "cost,navi,polyline,tmcs,traffic",
+        strategy: int = 0,
     ) -> dict:
-        """Driving directions (v5).
+        """Driving directions (v3 + extensions=all).
 
         origin / destination format: 'lng,lat'.
-        strategy=32 ~ 综合（速度优先 + 距离 + 路况）
-        Returns the route object; .paths[0].cost.duration in seconds.
+        strategy:
+          0  = 速度优先（默认，含路况）
+          2  = 距离最短
+          10 = 综合（含路况）
+        Returns the route object; .paths[0].duration in seconds (string),
+        and per-segment congestion in .paths[0].steps[].tmcs[].
 
-        See https://lbs.amap.com/api/webservice/guide/api-advanced/newroute
+        我们用 v3 而不是 v5，因为：
+        - v3 的 extensions=all 一次返回 steps[].tmcs（路况片段），格式跟
+          线上 /claude/traffic_monitor 项目用的一致，已经验证过半年
+        - v5 的 tmcs 字段位置和命名不稳定，多次试不出来全套数据
         """
         data = await self._get(
-            f"{AMAP_BASE_V5}/direction/driving",
+            f"{AMAP_BASE}/direction/driving",
             {
                 "origin": origin,
                 "destination": destination,
+                "extensions": "all",
                 "strategy": strategy,
-                "show_fields": show_fields,
             },
         )
         return data.get("route", {})

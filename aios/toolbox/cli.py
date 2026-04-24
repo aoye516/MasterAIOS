@@ -149,37 +149,70 @@ async def cmd_route(args: argparse.Namespace) -> int:
             _emit(args, {"origin": o, "destination": d, "route": route}, ["(no route)"])
             return 1
         p = paths[0]
-        cost = p.get("cost", {})
-        dur_s = int(float(cost.get("duration", 0))) if cost else 0
+        # v3 + extensions=all: duration / distance / tolls 都直接在 path 上（字符串）
+        dur_s = int(float(p.get("duration", 0)))
         dist_m = int(float(p.get("distance", 0)))
-        tolls = cost.get("tolls", 0) if cost else 0
-        traffic_lights = cost.get("traffic_lights", "?") if cost else "?"
-        # tmcs (traffic condition segments) 仅在 strategy 含路况时有
-        tmcs = p.get("tmcs", []) or []
-        congested = sum(1 for t in tmcs if t.get("status") in ("拥堵", "严重拥堵", "缓行"))
+        tolls = float(p.get("tolls", 0) or 0)
+        traffic_lights = p.get("traffic_lights", "?")
+
+        # 路况片段在 steps[].tmcs[]
+        # tmc 字段：status (畅通/缓行/拥堵/严重拥堵/未知) + distance
+        congested_dist_m = 0
+        total_dist_m = 0
+        congested_roads: list[str] = []
+        for step in p.get("steps", []) or []:
+            road = (step.get("road") or "").strip()
+            for tmc in step.get("tmcs", []) or []:
+                tdist = int(float(tmc.get("distance", 0)))
+                status = str(tmc.get("status", ""))
+                total_dist_m += tdist
+                if status in ("拥堵", "严重拥堵"):
+                    congested_dist_m += tdist
+                    if road and road not in congested_roads:
+                        congested_roads.append(road)
+
+        congestion_ratio = (
+            congested_dist_m / total_dist_m if total_dist_m > 0 else 0.0
+        )
+        if total_dist_m == 0:
+            verdict = "未知"
+        elif congestion_ratio < 0.05:
+            verdict = "基本畅通"
+        elif congestion_ratio < 0.20:
+            verdict = "局部缓行"
+        elif congestion_ratio < 0.40:
+            verdict = "拥堵"
+        else:
+            verdict = "严重拥堵"
+
         payload = {
             "origin": o,
             "destination": d,
             "duration_s": dur_s,
             "duration_human": _seconds_to_human(dur_s),
             "distance_m": dist_m,
-            "tolls_yuan": float(tolls) if tolls else 0,
+            "tolls_yuan": tolls,
             "traffic_lights": traffic_lights,
-            "congested_segments": congested,
-            "total_segments": len(tmcs),
+            "congested_distance_m": congested_dist_m,
+            "total_traffic_distance_m": total_dist_m,
+            "congestion_ratio": round(congestion_ratio, 3),
+            "congestion_verdict": verdict,
+            "congested_roads": congested_roads[:10],
         }
         pretty = [
             f"{o['name']} → {d['name']}",
             f"  全程 {dist_m / 1000:.1f} km，预计 {_seconds_to_human(dur_s)}，"
-            f"过路费 {payload['tolls_yuan']:.0f} 元，红绿灯 {traffic_lights} 个",
+            f"过路费 {tolls:.0f} 元，红绿灯 {traffic_lights} 个",
         ]
-        if tmcs:
+        if total_dist_m > 0:
             pretty.append(
-                f"  路况：{congested}/{len(tmcs)} 段拥堵 "
-                f"({congested / len(tmcs) * 100:.0f}%)"
-                if len(tmcs) > 0
-                else "  路况：畅通"
+                f"  路况：{verdict}（拥堵 {congested_dist_m / 1000:.1f} km / "
+                f"{total_dist_m / 1000:.1f} km，{congestion_ratio * 100:.0f}%）"
             )
+            if congested_roads:
+                pretty.append(f"  拥堵路段：{', '.join(congested_roads[:5])}")
+        else:
+            pretty.append("  路况：未拿到路况数据")
         _emit(args, payload, pretty)
     return 0
 
