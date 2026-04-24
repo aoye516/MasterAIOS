@@ -27,6 +27,10 @@ import json
 import os
 import re
 import shutil
+import signal
+import subprocess
+import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator
@@ -227,6 +231,237 @@ async def _stream_events(proc: asyncio.subprocess.Process) -> AsyncIterator[dict
             yield json.loads(line)
         except json.JSONDecodeError:
             continue
+
+
+# ---------------------------------------------------------------------------
+# Background-task API (start / status / wait / cancel / list_running)
+#
+# This is the *recommended* path for Master to drive long-running coding
+# tasks. The previous synchronous `delegate_to_claude` is preserved below
+# for ad-hoc / smoke-test use, but in nanobot it gets killed by the 120s
+# `exec` cap before claude has time to finish anything substantial.
+#
+# Workflow (see workspace/skills/code_helper/SKILL.md):
+#   1. start_task(...)        → returns immediately with {pid, started_at, ...}
+#   2. (optional) cron 1-min  → Master schedules a poll job to surface progress
+#   3. task_status(...)       → fast, reads _run/status.json
+#   4. task_result(...)       → reads _run/result.json (only when status=done)
+# ---------------------------------------------------------------------------
+
+
+def _run_dir_for(task: str, root: Path | None = None) -> Path:
+    cwd = task_session_path(task, root)
+    return cwd / "_run"
+
+
+def _read_json_or_none(path: Path) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """Best-effort check whether `pid` is still running. POSIX-only."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Process exists but we can't signal it — count as alive.
+        return True
+    return True
+
+
+def _reconcile_status(status: dict, run_dir: Path) -> dict:
+    """If status.json says running but the watcher PID is gone, mark stale.
+
+    This catches the case where the runner was OOM-killed / crashed before
+    it could write status=failed itself.
+    """
+    if status.get("status") not in ("starting", "running"):
+        return status
+    pid = status.get("pid")
+    pidfile = run_dir / "pidfile"
+    # If pidfile is gone, the runner finalized normally — trust status.json.
+    if not pidfile.exists() and status.get("status") in ("starting", "running"):
+        # Edge: status snapshot was written, then runner finalized result and
+        # status both, but we caught it mid-write. Re-read once.
+        status_path = run_dir / "status.json"
+        latest = _read_json_or_none(status_path)
+        if latest:
+            status = latest
+    if pid and not _is_pid_alive(int(pid)) and status.get("status") in ("starting", "running"):
+        status = {**status, "status": "failed",
+                  "error": status.get("error") or "watcher process vanished"}
+    return status
+
+
+def start_task(
+    task: str,
+    description: str,
+    *,
+    workspace_root: Path | None = None,
+    timeout_s: int | None = None,
+) -> dict:
+    """Spawn a detached watcher (`python -m aios.acp.runner`) and return immediately.
+
+    Returns a dict with the watcher PID, task workspace path, and pointers
+    to the `_run/` artifacts. The caller (Master via `aios code-helper start`)
+    should surface this to the user instantly and then poll
+    :func:`task_status` (or call `aios code-helper poll` on a cron).
+    """
+    _validate_task_name(task)
+    base = workspace_root or DEFAULT_WORKSPACE_ROOT
+    _ensure_workspace_claude_md(base)
+    cwd = task_session_path(task, base)
+    run_dir = _run_dir_for(task, base)
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Refuse to start if a previous run is still alive (concurrent run is
+    # almost always a bug — same task name = one logical session).
+    existing = _read_json_or_none(run_dir / "status.json")
+    if existing and existing.get("status") in ("starting", "running"):
+        old_pid = existing.get("pid")
+        if old_pid and _is_pid_alive(int(old_pid)):
+            raise RuntimeError(
+                f"task {task!r} already running (pid={old_pid}); "
+                f"use `aios code-helper status {task}` or `... cancel {task}`"
+            )
+
+    timeout = timeout_s or DEFAULT_TIMEOUT_S
+
+    args = [
+        sys.executable, "-m", "aios.acp.runner",
+        task, description,
+        "--timeout", str(timeout),
+    ]
+
+    # `start_new_session=True` gives the runner its own PGID — when the
+    # parent (Master's `aios` invocation) exits, runner stays alive.
+    # stdin/out/err to /dev/null because the runner mirrors everything
+    # to <cwd>/_run/{stdout.jsonl,stderr.log} itself.
+    devnull = open(os.devnull, "ab")
+    proc = subprocess.Popen(
+        args,
+        stdin=subprocess.DEVNULL,
+        stdout=devnull,
+        stderr=devnull,
+        cwd=str(cwd),
+        start_new_session=True,
+        env={**os.environ},
+    )
+
+    started_at = time.time()
+    return {
+        "task": task,
+        "pid": proc.pid,
+        "cwd": str(cwd),
+        "status_path": str(run_dir / "status.json"),
+        "stdout_path": str(run_dir / "stdout.jsonl"),
+        "result_path": str(run_dir / "result.json"),
+        "started_at": started_at,
+        "timeout_s": timeout,
+    }
+
+
+def task_status(task: str, *, workspace_root: Path | None = None) -> dict | None:
+    """Return the latest status snapshot for `task`, or None if it never ran.
+
+    The returned dict has at least `task`, `status`, `pid`, `cwd`, `started_at`,
+    `elapsed_s`, plus accumulated counters when running. See `runner._Status`
+    for the full schema.
+    """
+    _validate_task_name(task)
+    run_dir = _run_dir_for(task, workspace_root)
+    status_path = run_dir / "status.json"
+    s = _read_json_or_none(status_path)
+    if s is None:
+        return None
+    return _reconcile_status(s, run_dir)
+
+
+def task_result(task: str, *, workspace_root: Path | None = None) -> dict | None:
+    """Return the persisted result.json (only meaningful when status=done/failed/cancelled)."""
+    _validate_task_name(task)
+    return _read_json_or_none(_run_dir_for(task, workspace_root) / "result.json")
+
+
+def cancel_task(task: str, *, workspace_root: Path | None = None) -> bool:
+    """SIGTERM the watcher for `task`. Returns True if a signal was actually sent."""
+    s = task_status(task, workspace_root=workspace_root)
+    if not s:
+        return False
+    if s.get("status") not in ("starting", "running"):
+        return False
+    pid = s.get("pid")
+    if not pid or not _is_pid_alive(int(pid)):
+        return False
+    try:
+        os.kill(int(pid), signal.SIGTERM)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+async def wait_task(
+    task: str,
+    *,
+    workspace_root: Path | None = None,
+    timeout_s: float = 60.0,
+    poll_interval_s: float = 1.0,
+) -> dict:
+    """Block until the task reaches a terminal state or `timeout_s` elapses.
+
+    Returns the final status snapshot. Caller should check `status` field —
+    if it's still `running`/`starting`, the wait timed out.
+    """
+    _validate_task_name(task)
+    deadline = time.time() + timeout_s
+    s: dict | None = None
+    while True:
+        s = task_status(task, workspace_root=workspace_root)
+        if s and s.get("status") in ("done", "failed", "cancelled"):
+            return s
+        if time.time() >= deadline:
+            return s or {"task": task, "status": "unknown", "error": "no status.json found"}
+        await asyncio.sleep(poll_interval_s)
+
+
+def list_running_tasks(*, workspace_root: Path | None = None) -> list[dict]:
+    """List all tasks whose status.json reports running/starting."""
+    base = workspace_root or DEFAULT_WORKSPACE_ROOT
+    out: list[dict] = []
+    if not base.exists():
+        return out
+    for d in base.iterdir():
+        if not d.is_dir() or d.name.startswith("_"):
+            continue
+        s = _read_json_or_none(d / "_run" / "status.json")
+        if not s:
+            continue
+        s = _reconcile_status(s, d / "_run")
+        if s.get("status") in ("starting", "running"):
+            out.append(s)
+    return out
+
+
+def list_tasks_with_status(*, workspace_root: Path | None = None) -> list[dict]:
+    """List every known task workspace plus its last-known status (or None)."""
+    base = workspace_root or DEFAULT_WORKSPACE_ROOT
+    out: list[dict] = []
+    if not base.exists():
+        return out
+    for d in sorted(p for p in base.iterdir() if p.is_dir() and not p.name.startswith("_")):
+        s = _read_json_or_none(d / "_run" / "status.json")
+        if s:
+            s = _reconcile_status(s, d / "_run")
+        out.append({"task": d.name, "status": s})
+    return out
 
 
 async def delegate_to_claude(

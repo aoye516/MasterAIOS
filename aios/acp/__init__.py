@@ -15,15 +15,29 @@ the OpenClaw `claude-as-acp` skill exposed.
 from aios.acp.client import (
     ClaudeCliError,
     CodeHelperResult,
+    cancel_task,
     delegate_to_claude,
+    list_running_tasks,
     list_tasks,
+    list_tasks_with_status,
+    start_task,
+    task_result,
     task_session_path,
+    task_status,
+    wait_task,
 )
 
 __all__ = [
     "ClaudeCliError",
     "CodeHelperResult",
+    "cancel_task",
     "delegate_to_claude",
+    "list_running_tasks",
     "list_tasks",
+    "list_tasks_with_status",
+    "start_task",
+    "task_result",
     "task_session_path",
+    "task_status",
+    "wait_task",
 ]

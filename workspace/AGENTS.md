@@ -115,30 +115,82 @@ aios toolbox recipe --ingredients "鸡蛋,西红柿,土豆" --count 3 \
 
 如果用户没有"冰箱"这个 location alias → 直接追问"我看冰箱里有啥要先在 steward 录一下，要不你直接告诉我现有食材？"，不要捏造食材。
 
-### 关于 code_helper（**写代码 / 改文件 / 跑命令默认走这里 = 省钱**）
+### 关于 code_helper（**写代码 / 改文件 / 跑命令默认走这里 = 省钱 + 异步工作流**）
 
 我（Master）走的是按量付费的主 API，每 1k tokens 都要钱；`aios code-helper` 后端
 接的是火山引擎 ARK 的 Claude Code coding plan（包月 / 大额度），同样的代码任务
 便宜一个数量级。**默认应该委托给 `aios code-helper`，而不是自己一行行写到回复里。**
 
+#### ⚠️ 工作流变了：必须用 `start` + cron poll，不要再用同步形式
+
+旧版本用的是 `aios code-helper --task X "desc" --json` —— 这种**会阻塞**整个
+nanobot exec，而 nanobot exec 的硬超时是 **120 秒**。复杂任务（写完整应用、跨文件
+重构、部署小工具）几乎肯定撑不到 2 分钟，结果就是 CC 被强杀、文件写一半、我拿不到
+结果还以为它失败了。
+
+新工作流是**异步的**：`start` 几毫秒返回，CC 在后台 daemon 进程里慢慢跑，poll 也
+是几毫秒读一个 JSON 文件。详见 `workspace/skills/code_helper/SKILL.md`。
+
 #### 必委托（出现下面任一信号就调）
 
 - 用户消息出现 `用 cc` / `让 cc` / `用 Claude Code` / `让 Claude` / `让它继续改`
-- 任务关键词：`写脚本` / `写个程序` / `写 demo` / `写文件` / `改文件` / `重构` / `跑测试` / `调试`
+- 任务关键词：`写脚本` / `写个程序` / `写 demo` / `写文件` / `改文件` / `重构` / `跑测试` / `调试` / `部署小工具`
 - 任务需要 > 30 行代码 / 跨多个文件 / 严格按 1/2/3 步执行
 - 我自己上一轮用 `aios code-helper` 做过相关的事（用户说"继续 / 再 / 改" → 同名续接）
 
-调用样板：
+#### 标准三步（**死记硬背照抄**）
+
+**1) `start`（毫秒级返回）**：
 
 ```bash
-aios code-helper --task <kebab-case-name> "<完整任务描述>" --json
+aios code-helper start <kebab-case-name> "<完整任务描述>" [--timeout 1800] --json
 ```
 
 任务名规则：小写字母 + 数字 + `-`，1-64 字符。**同名 = 同一个 CC session 有记忆，
-不同名 = 全新 session 从零**。每次调完在 reply 末尾写一行 `📎 CC task: <名字>`，
-下一轮自己抄回来。
+不同名 = 全新 session 从零**。
 
-详见 `workspace/skills/code_helper/SKILL.md`。
+**2) 立刻给用户反馈（关键！别让用户以为你在发呆）**：
+
+> 📤 已派给 Claude Code 处理 task=`<task-name>`（pid xxx）
+> 工作目录：`~/aios-cc-workspace/<task>/`
+> 估计 N 分钟，我每分钟会跟你同步一次进度，完成 / 失败 / 需要你确认时会立刻告诉你。
+>
+> 📎 CC task: **<task-name>**
+
+**3) 注册 1 分钟一次的 cron poll 回调**：
+
+用 nanobot 的 `cron` 工具 schedule 一条 `*/1 * * * *` 的任务，message 写：
+
+> 【CC poll · `<task-name>`】运行 `aios code-helper poll <task-name>`，把输出原样转给用户。
+> - 如果输出含 `[DONE]` → 转给用户 + 调用 cron remove 取消这条 cron
+> - 如果输出含 `[FAILED]` / `[CANCELLED]` → 转给用户 + cron remove
+> - 如果输出含 `[NEEDS_CONFIRMATION]` → 把 CC 在问的问题转给用户，cron 保留；
+>   等用户回复后用 `aios code-helper start <task-name> "<用户的回复>"` 续接
+> - 如果输出含 `[RUNNING]` → 转给用户作为进度同步，cron 保留
+
+**这条 cron 必须在每个 `start` 之后立刻注册。** 看到 `[DONE]/[FAILED]/[CANCELLED]`
+就 cron remove，不要让它一直 poll 已完成任务。
+
+#### 用户没等到 cron 又来催"咋样了"
+
+不要重新 `start`。手动 poll 一次：
+
+```bash
+aios code-helper poll <task-name>
+```
+
+#### 子命令速查
+
+| 命令 | 用途 |
+|---|---|
+| `aios code-helper start <task> "<prompt>" --json` | 派任务，毫秒返回 |
+| `aios code-helper poll <task>` | **主要工作命令**：友好进度 + `[DONE]/[FAILED]/[NEEDS_CONFIRMATION]/[RUNNING]` 标记 |
+| `aios code-helper status <task> --json` | 原始 status.json |
+| `aios code-helper result <task> --json` | 完成后的 result.json |
+| `aios code-helper logs <task> --tail 50` | 看原始 stream-json（debug） |
+| `aios code-helper cancel <task>` | SIGTERM 杀 watcher |
+| `aios code-helper list [--running]` | 列任务 |
+| `aios code-helper wait <task> --timeout 60` | 阻塞等 done。**不要在 nanobot exec 里用**（会撞 120s） |
 
 #### 不要委托
 

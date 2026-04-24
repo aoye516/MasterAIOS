@@ -2,8 +2,18 @@
 
 Usage:
     aios archive-search "<query>" [--user-id N] [--limit K] [--embed] [--json]
-    aios code-helper --task <name> "<description>" [--timeout SEC] [--json]
-    aios code-helper --list-tasks
+    aios code-helper start  <task> "<prompt>" [--timeout SEC] [--json]
+    aios code-helper status <task> [--json]
+    aios code-helper poll   <task> [--json]    # friendly progress / [DONE] / [FAILED] / [NEEDS_CONFIRMATION]
+    aios code-helper wait   <task> [--timeout SEC] [--json]
+    aios code-helper cancel <task>
+    aios code-helper logs   <task> [--tail N]
+    aios code-helper result <task> [--json]
+    aios code-helper list   [--running] [--json]
+    # Sync (legacy, may hit nanobot 120s exec cap):
+    aios code-helper run    <task> "<prompt>" [--timeout SEC] [--json]
+    aios code-helper --task <name> "<description>" [--timeout SEC] [--json]   # alias of `run`
+    aios code-helper --list-tasks                                              # alias of `list`
     aios db-ping
 
     aios route record    --query "..." --routed-to <agent> [--confidence F]
@@ -91,52 +101,268 @@ async def _cmd_archive_search(args: argparse.Namespace) -> int:
     return 0
 
 
-async def _cmd_code_helper(args: argparse.Namespace) -> int:
-    from aios.acp import delegate_to_claude, list_tasks
+def _format_age(ts: float | None, now: float | None = None) -> str:
+    if not ts:
+        return "?"
+    delta = (now or __import__("time").time()) - ts
+    if delta < 60:
+        return f"{int(delta)}s ago"
+    if delta < 3600:
+        return f"{int(delta // 60)}m ago"
+    return f"{int(delta // 3600)}h ago"
 
-    if args.list_tasks:
-        tasks = list_tasks()
-        if args.json:
-            print(json.dumps(tasks, ensure_ascii=False))
+
+def _render_poll(status: dict | None, result: dict | None) -> str:
+    """Friendly progress / final-state summary for `aios code-helper poll`.
+
+    The Master Agent reads this output verbatim and forwards it to the user.
+    Markers `[DONE]` / `[FAILED]` / `[CANCELLED]` / `[NEEDS_CONFIRMATION]`
+    let Master decide whether to keep the cron poll running, cancel it,
+    or escalate back to the user for input.
+    """
+    import time as _t
+    if status is None:
+        return "❓ [UNKNOWN] task 不存在或还没启动 (no _run/status.json)"
+
+    task = status.get("task", "?")
+    state = status.get("status", "?")
+    elapsed = status.get("elapsed_s") or 0
+    files = status.get("files_written") or []
+    tool_n = status.get("tool_calls_count") or 0
+    tool_recent = status.get("tool_calls_recent") or []
+    text_preview = (status.get("final_text_preview") or "").strip()
+    needs = status.get("needs_confirmation")
+    error = status.get("error")
+    cost = status.get("cost_usd")
+    duration_ms = status.get("duration_ms")
+    resumed = status.get("resumed")
+
+    # Marker line — Master scans for these to drive cron lifecycle.
+    if state == "done":
+        marker = "✅ [DONE]"
+    elif state == "failed":
+        marker = "❌ [FAILED]"
+    elif state == "cancelled":
+        marker = "⛔ [CANCELLED]"
+    elif needs:
+        marker = "❓ [NEEDS_CONFIRMATION]"
+    else:
+        marker = "🔄 [RUNNING]"
+
+    lines = [f"{marker} task={task}  status={state}  elapsed={int(elapsed)}s"
+             + (f"  resumed={resumed}" if resumed else "")]
+
+    if cost is not None or duration_ms is not None:
+        bits = []
+        if duration_ms is not None:
+            bits.append(f"duration={duration_ms}ms")
+        if cost is not None:
+            bits.append(f"cost=${cost:.4f}")
+        lines.append("   " + "  ".join(bits))
+
+    if files:
+        shown = ", ".join(__import__("os").path.basename(f) for f in files[:8])
+        more = f" (+{len(files)-8} more)" if len(files) > 8 else ""
+        lines.append(f"📁 已写文件 ({len(files)}): {shown}{more}")
+
+    if tool_n:
+        lines.append(f"🔧 工具调用 {tool_n} 次")
+        for tc in tool_recent[-3:]:
+            age = _format_age(tc.get("ts"))
+            lines.append(f"   · {tc.get('summary','?')}  ({age})")
+
+    if text_preview:
+        lines.append("💬 CC 最新反馈:")
+        for ln in text_preview.splitlines()[-6:]:
+            lines.append(f"   {ln.rstrip()}")
+
+    if needs:
+        reason = (status.get("needs_confirmation_reason") or "").strip()
+        lines.append("⚠️  CC 在等你确认 — 把上面问题转给用户，等用户回复后用 "
+                     f"`aios code-helper start {task} \"<用户的回复>\"` 续接")
+        if reason and reason not in text_preview:
+            lines.append(f"   {reason[:200]}")
+
+    if error:
+        lines.append(f"⚠️  error: {error}")
+
+    if state == "done":
+        lines.append(f"📎 CC task: {task}  (续接同一名字即可继续)")
+        if result:
+            ft = (result.get("final_text") or "").strip()
+            if ft and len(ft) > len(text_preview):
+                lines.append("--- final ---")
+                lines.append(ft[:1200])
+                if len(ft) > 1200:
+                    lines.append(f"... (+{len(ft)-1200} chars, see _run/result.json)")
+
+    return "\n".join(lines)
+
+
+async def _cmd_code_helper(args: argparse.Namespace) -> int:
+    from aios.acp import (
+        cancel_task,
+        delegate_to_claude,
+        list_running_tasks,
+        list_tasks_with_status,
+        start_task,
+        task_result,
+        task_status,
+        wait_task,
+    )
+
+    sub = getattr(args, "helper_cmd", None)
+
+    # ---- legacy flags fall through to `run` / `list` ----
+    if sub is None:
+        if getattr(args, "list_tasks", False):
+            sub = "list"
         else:
-            if not tasks:
-                print("(no code-helper tasks yet)")
-            for t in tasks:
-                print(t)
+            if not getattr(args, "task", None) or not getattr(args, "description", None):
+                print("ERROR: must use a subcommand (start/status/poll/wait/...) or "
+                      "legacy `--task NAME \"desc\"` form. See `aios code-helper -h`.",
+                      file=sys.stderr)
+                return 2
+            sub = "run"
+
+    # ---- start: spawn detached watcher, return immediately ----
+    if sub == "start":
+        try:
+            info = start_task(args.task, args.prompt, timeout_s=args.timeout)
+        except RuntimeError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps(info, ensure_ascii=False, indent=2))
+        else:
+            print(f"📤 派给 Claude Code 处理 task={info['task']} pid={info['pid']}")
+            print(f"   cwd: {info['cwd']}")
+            print(f"   超时上限: {info['timeout_s']}s")
+            print(f"   poll: aios code-helper poll {info['task']}")
+            print(f"   logs: aios code-helper logs {info['task']} --tail 30")
         return 0
 
-    if not args.task or not args.description:
-        print("ERROR: --task <name> and a description are required", file=sys.stderr)
-        return 2
+    # ---- status: raw status.json ----
+    if sub == "status":
+        s = task_status(args.task)
+        if s is None:
+            print(f"(no status for task={args.task})", file=sys.stderr)
+            return 1
+        print(json.dumps(s, ensure_ascii=False, indent=2))
+        return 0
 
-    result = await delegate_to_claude(
-        args.task,
-        args.description,
-        timeout_s=args.timeout,
-    )
-    if args.json:
-        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    # ---- poll: friendly progress + DONE/FAILED/CANCELLED/NEEDS_CONFIRMATION marker ----
+    if sub == "poll":
+        s = task_status(args.task)
+        r = task_result(args.task) if (s and s.get("status") == "done") else None
+        text = _render_poll(s, r)
+        if args.json:
+            print(json.dumps({"status": s, "result": r, "rendered": text},
+                             ensure_ascii=False, indent=2))
+        else:
+            print(text)
+        # exit code: 0 if a terminal state, 2 if running, 1 if missing
+        if s is None:
+            return 1
+        return 0 if s.get("status") in ("done", "failed", "cancelled") else 2
+
+    # ---- wait: block up to --timeout seconds for terminal state ----
+    if sub == "wait":
+        s = await wait_task(args.task, timeout_s=args.timeout)
+        r = task_result(args.task) if (s and s.get("status") == "done") else None
+        if args.json:
+            print(json.dumps({"status": s, "result": r}, ensure_ascii=False, indent=2))
+        else:
+            print(_render_poll(s, r))
+        return 0 if s and s.get("status") == "done" else 1
+
+    # ---- cancel: SIGTERM the watcher ----
+    if sub == "cancel":
+        ok = cancel_task(args.task)
+        print("ok" if ok else "(no running task to cancel)")
+        return 0 if ok else 1
+
+    # ---- logs: tail stdout.jsonl (raw stream-json) ----
+    if sub == "logs":
+        run_dir = Path.home() / "aios-cc-workspace" / args.task / "_run"
+        path = run_dir / "stdout.jsonl"
+        if not path.exists():
+            print(f"(no logs at {path})", file=sys.stderr)
+            return 1
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for ln in lines[-args.tail:]:
+            print(ln)
+        return 0
+
+    # ---- result: dump result.json ----
+    if sub == "result":
+        r = task_result(args.task)
+        if r is None:
+            print(f"(no result for task={args.task} — still running or never finished)",
+                  file=sys.stderr)
+            return 1
+        print(json.dumps(r, ensure_ascii=False, indent=2))
+        return 0
+
+    # ---- list: every task workspace + status (or only running) ----
+    if sub == "list":
+        if getattr(args, "running", False):
+            tasks = list_running_tasks()
+            if args.json:
+                print(json.dumps(tasks, ensure_ascii=False, indent=2))
+            else:
+                if not tasks:
+                    print("(no running code-helper tasks)")
+                for t in tasks:
+                    print(f"  🔄 {t.get('task')}  pid={t.get('pid')}  "
+                          f"elapsed={int(t.get('elapsed_s') or 0)}s")
+            return 0
+        rows = list_tasks_with_status()
+        if args.json:
+            print(json.dumps(rows, ensure_ascii=False, indent=2))
+        else:
+            if not rows:
+                print("(no code-helper tasks yet)")
+            for row in rows:
+                s = row.get("status") or {}
+                state = s.get("status", "—")
+                elapsed = s.get("elapsed_s")
+                tail = f"  elapsed={int(elapsed)}s" if elapsed else ""
+                print(f"  {row['task']:30s}  {state}{tail}")
+        return 0
+
+    # ---- run: legacy synchronous (start + wait_long + render) ----
+    if sub == "run":
+        result = await delegate_to_claude(
+            args.task,
+            args.description if hasattr(args, "description") else args.prompt,
+            timeout_s=args.timeout,
+        )
+        if args.json:
+            print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+            return 0 if not result.error else 1
+        print(f"task: {result.task}")
+        print(f"cwd:  {result.cwd}")
+        print(f"resumed: {result.resumed}")
+        if result.session_id:
+            print(f"session_id: {result.session_id}")
+        if result.duration_ms is not None:
+            print(f"duration: {result.duration_ms} ms")
+        if result.cost_usd is not None:
+            print(f"cost: ${result.cost_usd:.4f}")
+        if result.tool_calls:
+            print("tool calls:")
+            for tc in result.tool_calls:
+                print(f"  - {tc.get('name')}({list((tc.get('input') or {}).keys())})")
+        if result.error:
+            print(f"ERROR: {result.error}", file=sys.stderr)
+        print()
+        print("--- final ---")
+        print(result.final_text.strip() or "(empty)")
         return 0 if not result.error else 1
 
-    print(f"task: {result.task}")
-    print(f"cwd:  {result.cwd}")
-    print(f"resumed: {result.resumed}")
-    if result.session_id:
-        print(f"session_id: {result.session_id}")
-    if result.duration_ms is not None:
-        print(f"duration: {result.duration_ms} ms")
-    if result.cost_usd is not None:
-        print(f"cost: ${result.cost_usd:.4f}")
-    if result.tool_calls:
-        print("tool calls:")
-        for tc in result.tool_calls:
-            print(f"  - {tc.get('name')}({list((tc.get('input') or {}).keys())})")
-    if result.error:
-        print(f"ERROR: {result.error}", file=sys.stderr)
-    print()
-    print("--- final ---")
-    print(result.final_text.strip() or "(empty)")
-    return 0 if not result.error else 1
+    print(f"ERROR: unknown subcommand {sub!r}", file=sys.stderr)
+    return 2
 
 
 async def _cmd_route_record(args: argparse.Namespace) -> int:
@@ -335,12 +561,64 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_archive.add_argument("--json", action="store_true", help="emit JSON instead of pretty text")
 
-    p_helper = sub.add_parser("code-helper", help="Delegate a coding task to claude CLI")
-    p_helper.add_argument("--task", help="task name (kebab-case, ≤64 chars). Same name = continue session")
-    p_helper.add_argument("description", nargs="?", help="task description (one shell-quoted string)")
-    p_helper.add_argument("--timeout", type=int, default=None, help="max seconds before cancelling")
-    p_helper.add_argument("--list-tasks", action="store_true", help="list known task workspaces and exit")
-    p_helper.add_argument("--json", action="store_true")
+    p_helper = sub.add_parser(
+        "code-helper",
+        help="Delegate a coding task to claude CLI (background workflow recommended)",
+        description="Recommended workflow: `start` to spawn detached, then poll on a "
+                    "1-min cron until you see [DONE] / [FAILED] / [NEEDS_CONFIRMATION]. "
+                    "Use `run` for a synchronous (blocking) call — but it will be killed "
+                    "by nanobot's 120s exec cap on long tasks.",
+    )
+
+    helper_sub = p_helper.add_subparsers(dest="helper_cmd", required=True,
+                                         metavar="{start,status,poll,wait,cancel,logs,result,list,run}")
+
+    p_h_start = helper_sub.add_parser("start", help="spawn a detached watcher and return immediately")
+    p_h_start.add_argument("task", help="task name (kebab-case, ≤64 chars). Same name = continue session")
+    p_h_start.add_argument("prompt", help="full prompt for claude -p (shell-quoted)")
+    p_h_start.add_argument("--timeout", type=int, default=None,
+                           help="hard ceiling for the runner (default 1800s)")
+    p_h_start.add_argument("--json", action="store_true")
+
+    p_h_status = helper_sub.add_parser("status", help="dump _run/status.json (raw)")
+    p_h_status.add_argument("task")
+    p_h_status.add_argument("--json", action="store_true")
+
+    p_h_poll = helper_sub.add_parser(
+        "poll",
+        help="friendly progress + [DONE]/[FAILED]/[NEEDS_CONFIRMATION] marker for cron",
+    )
+    p_h_poll.add_argument("task")
+    p_h_poll.add_argument("--json", action="store_true")
+
+    p_h_wait = helper_sub.add_parser("wait", help="block until terminal state or --timeout")
+    p_h_wait.add_argument("task")
+    p_h_wait.add_argument("--timeout", type=float, default=60.0)
+    p_h_wait.add_argument("--json", action="store_true")
+
+    p_h_cancel = helper_sub.add_parser("cancel", help="SIGTERM the watcher")
+    p_h_cancel.add_argument("task")
+
+    p_h_logs = helper_sub.add_parser("logs", help="tail _run/stdout.jsonl (raw stream-json)")
+    p_h_logs.add_argument("task")
+    p_h_logs.add_argument("--tail", type=int, default=50)
+
+    p_h_result = helper_sub.add_parser("result", help="dump _run/result.json")
+    p_h_result.add_argument("task")
+    p_h_result.add_argument("--json", action="store_true")
+
+    p_h_list = helper_sub.add_parser("list", help="list all known tasks (or only running)")
+    p_h_list.add_argument("--running", action="store_true", help="only show running/starting tasks")
+    p_h_list.add_argument("--json", action="store_true")
+
+    p_h_run = helper_sub.add_parser(
+        "run",
+        help="(legacy sync) start + block until done; capped by nanobot 120s exec",
+    )
+    p_h_run.add_argument("task")
+    p_h_run.add_argument("prompt")
+    p_h_run.add_argument("--timeout", type=int, default=None)
+    p_h_run.add_argument("--json", action="store_true")
 
     sub.add_parser("db-ping", help="Verify PostgreSQL connectivity and show row counts")
 
@@ -407,8 +685,72 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _rewrite_legacy_helper_argv(argv: list[str] | None) -> list[str] | None:
+    """Translate legacy `aios code-helper [--task X] [<desc>] [--list-tasks]` to the new sub form.
+
+    Old usage we still want to honor:
+      aios code-helper --task pomodoro "build a pomodoro app"
+      aios code-helper --task pomodoro "..." --json --timeout 600
+      aios code-helper --list-tasks
+      aios code-helper --list-tasks --json
+
+    Anything else (already using `start` / `status` / ... / `run`) is passed through.
+    """
+    if not argv or argv[0] != "code-helper":
+        return argv
+    rest = argv[1:]
+    new_subs = {"start", "status", "poll", "wait", "cancel", "logs", "result", "list", "run", "-h", "--help"}
+    if rest and rest[0] in new_subs:
+        return argv
+
+    # legacy: scan for --task X / --list-tasks / first positional
+    task = None
+    description = None
+    timeout = None
+    json_flag = False
+    list_flag = False
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a == "--task" and i + 1 < len(rest):
+            task = rest[i + 1]; i += 2; continue
+        if a.startswith("--task="):
+            task = a.split("=", 1)[1]; i += 1; continue
+        if a == "--list-tasks":
+            list_flag = True; i += 1; continue
+        if a == "--timeout" and i + 1 < len(rest):
+            timeout = rest[i + 1]; i += 2; continue
+        if a.startswith("--timeout="):
+            timeout = a.split("=", 1)[1]; i += 1; continue
+        if a == "--json":
+            json_flag = True; i += 1; continue
+        if not a.startswith("-") and description is None:
+            description = a; i += 1; continue
+        # unknown / leftover — bail out, let argparse complain
+        return argv
+
+    if list_flag:
+        new = ["code-helper", "list"]
+        if json_flag:
+            new.append("--json")
+        return new
+
+    if task and description:
+        new = ["code-helper", "run", task, description]
+        if timeout:
+            new.extend(["--timeout", timeout])
+        if json_flag:
+            new.append("--json")
+        return new
+
+    return argv
+
+
 def main(argv: list[str] | None = None) -> int:
     _load_env()
+    if argv is None:
+        argv = sys.argv[1:]
+    argv = _rewrite_legacy_helper_argv(argv)
     parser = _build_parser()
     args = parser.parse_args(argv)
 
