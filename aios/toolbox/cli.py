@@ -292,12 +292,12 @@ def _summarize_transit(transit: dict) -> dict:
                 lines.append(label)
                 if len(lines) > 1:
                     transfers += 1
-        # 城际/地铁段
+        # 城际/动车段（amap 每段都会返一个 railway 占位，name=None 时是空，跳过）
         railway = seg.get("railway") or {}
-        if railway:
-            name = railway.get("name") or "城际"
-            if not lines or lines[-1] != name:
-                lines.append(name)
+        rname = railway.get("name")
+        if rname:
+            if not lines or lines[-1] != rname:
+                lines.append(rname)
                 if len(lines) > 1:
                     transfers += 1
 
