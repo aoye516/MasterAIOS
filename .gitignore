@@ -94,7 +94,10 @@ workspace/.cache/
 workspace/.runtime/
 workspace/cron/
 # Nanobot onboarding-generated templates (regenerated on first run)
-workspace/AGENTS.md
+# AGENTS.md is tracked: it's the always-on system prompt for the Master and
+# evolves with the sub-agent roster (Sprint 1+ added the routing block).
+# HEARTBEAT.md is per-deployment runtime state, ignored.
+# TOOLS.md is per-deployment too (auto-derived).
 workspace/HEARTBEAT.md
 workspace/TOOLS.md
 
