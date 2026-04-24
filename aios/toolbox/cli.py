@@ -223,7 +223,27 @@ async def cmd_route(args: argparse.Namespace) -> int:
 
 async def cmd_traffic_road(args: argparse.Namespace) -> int:
     async with AmapClient() as amap:
-        info = await amap.traffic_status_road(name=args.name, city=args.city)
+        try:
+            info = await amap.traffic_status_road(name=args.name, city=args.city)
+        except AmapError as e:
+            payload = {
+                "road": args.name,
+                "city": args.city,
+                "error": e.info,
+                "infocode": e.infocode,
+                "hint": (
+                    "高德的 traffic-road 接口只支持规范市政道路名（如『中关村大街』『长安街』），"
+                    "不支持俗称（『三环』）和高速（『京藏高速』）。"
+                    "整条通勤路线的路况建议用 `aios toolbox route <起> <终>`，"
+                    "它会按 steps 累计拥堵段。"
+                ),
+            }
+            pretty = [
+                f"{args.city} · {args.name}：查询失败 [{e.infocode}] {e.info}",
+                f"  提示：{payload['hint']}",
+            ]
+            _emit(args, payload, pretty)
+            return 2
         payload = {"road": args.name, "city": args.city, "info": info}
         eval_ = info.get("evaluation", {}) if info else {}
         desc = info.get("description", "(无描述)") if info else "(无数据)"
