@@ -1,7 +1,7 @@
 ---
 name: toolbox
 description: |
-  工具盒 — 高德全家桶（天气 / 路线 / 路况 / POI / 地理编码）+ 计算器 / 单位换算 / 时区转换 + 常用地点别名管理。
+  工具盒 — 高德全家桶（天气 / 路线 / 路况 / POI / 地理编码）+ 计算器 / 单位换算 / 时区转换 + 常用地点别名管理 + 网页摘要（稍后读）+ 食材推菜谱。
   本质：手机系统级"小工具"集合，以即时查询为主，几乎不存状态（只持久化用户的常用地点）。
 metadata:
   nanobot:
@@ -27,12 +27,14 @@ domain: utilities
   - **计算器**：算式求值（加减乘除幂次） — `aios toolbox calc "<expr>"`
   - **单位换算**：长度 / 重量 / 体积 / 时间 / 速度 / 温度 — `aios toolbox units <值> <从> <到>`
   - **时区**：当前时间 / 跨时区转换 — `aios toolbox tz [--time --from-zone --zones]`
+  - **网页摘要（稍后读）**：抓 URL → LLM 摘要 → 输出标题/摘要/要点/标签 — `aios toolbox summarize-url <url>`
+  - **食材推菜谱**：给定食材列表（可加 `--avoid` / `--diet`）→ LLM 推 N 道家常菜 — `aios toolbox recipe --ingredients ...`
 
 - **不负责**：
   - 设提醒 / 闹钟（→ nanobot 内置 `cron`）
-  - 把"今晚 7 点跑步"记成待办（→ 用 cron 提醒；待办列表是 wellbeing 的事，未上线）
-  - 钱 / 物（→ steward）
-  - 备忘 / 想看清单（→ mindscape）
+  - 备忘 / 想看清单 / **把网页摘要落库**（→ mindscape，summarize-url 只产出文本，落库要 Master 二次调 `aios mind note`）
+  - 钱 / 物（→ steward）；冰箱里有什么食材也是 steward 的事 — recipe 不会自己去查冰箱，需要 Master 先 `aios steward item-list --location 冰箱` 把食材清单传过来
+  - 习惯打卡 / 健康指标（→ wellbeing）
 
 ## Spawn Task 模板
 
@@ -62,6 +64,15 @@ domain: utilities
   - ⚠️ 该接口**只认规范道路名**（中关村大街、长安街、东三环路），**不支持** 俗称（"三环"）/ 高速（"京藏高速"）/ 别名（"公司"），不在白名单的会返回 `20003`
   - 用户问"三环堵不堵"这种俗称，先想想他通常实际去哪 —— 如果是问通勤，直接用 `route 公司 家` 更准
 - 别名 → 别名 的整段路况，**永远** 用 `route`，不要尝试 traffic-road
+- **「稍后读 / 把这个网页存一下 / 这篇文章讲了啥」** → 用 **`summarize-url <url>`**
+  - 命令只产出 `{title, summary, highlights, tags}` JSON，**不写 archival**
+  - 用户说"存一下""收藏一下"时，**Master 拿到结果后再调** `aios mind note "<summary 内容>" --tag <tags>`（链接放 metadata 里，命令行里 `--source <url>`）
+  - 如果用户只是想"读一下这个文章讲啥" → 摘要直接报，不存
+- 「**今晚吃啥 / 冰箱里有 X 能做啥菜 / 推荐 3 道家常菜**」 → 用 **`recipe --ingredients ...`**
+  - **不要自己幻想食材**，必须用 `--ingredients` 显式传
+  - 如果用户没说有什么 →  Master **先** `aios steward item-list --location 冰箱 --json` 拿到食材清单，**再**把名字逗号拼起来传给 `recipe --ingredients`
+  - 用户有忌口（USER.md 的 `health_tags` 含 `uric_acid_high` 等）→ 加 `--avoid "海鲜,内脏,红肉" --diet "低嘌呤"`
+  - 用户提到"快手 / 清淡 / 川菜 / 不想洗锅" → 塞到 `--style`
 
 常用 CLI：
 - aios toolbox weather 家                            # 现在天气
@@ -78,6 +89,8 @@ domain: utilities
 - aios toolbox calc "(3.14 * 2 ** 2)"
 - aios toolbox units 70 kg lb
 - aios toolbox tz --time 2026-04-25T14:00:00 --from-zone Asia/Shanghai --zones UTC America/New_York
+- aios toolbox summarize-url "https://..."           # 抓 + LLM 摘要
+- aios toolbox recipe --ingredients "鸡蛋,西红柿,土豆" --count 3
 
 每个命令都支持 `--json`，需要结构化结果时加上。
 ```
@@ -112,13 +125,16 @@ domain: utilities
 | `calc <expr>` | 安全表达式求值 | `calc "1024 * 0.85 + 12"` |
 | `units <v> <from> <to>` | 单位换算 | `units 70 kg lb` |
 | `tz` | 时区转换 | `tz --zones UTC America/New_York` |
+| `summarize-url <url>` | 抓网页 + LLM 摘要（含 highlights/tags） | `summarize-url https://example.com/post` |
+| `recipe --ingredients ...` | 食材推菜谱（可 `--avoid --diet --style --count`） | `recipe --ingredients "鸡蛋,西红柿"` |
 
 ## Few-shot 示例
 
 {{ROUTING_EXAMPLES}}
 
-## 三条铁律
+## 四条铁律
 
 1. **常用地点优先**：用户说"家""公司"先直接当 alias 用，命令报错再追问；不要每次都重新 geocode
-2. **失败不重试**：amap / network 错就如实回报错误码，**禁止** web_fetch 高德官网/任何 fallback —— 否则又会出"卡了"
+2. **失败不重试**：amap / LLM / network 错就如实回报错误码，**禁止** web_fetch 兜底 —— 否则又会出"卡了"
 3. **不出领域**：用户问"现在几点 / 算个数 / 北京天气" → 直接 toolbox；问"提醒我 7 点跑步" → 走 nanobot 内置 cron，不要 toolbox
+4. **跨子代理协同走 Master**：`recipe` 不直连 steward 的 inventory，`summarize-url` 不直连 mindscape 的 archival —— Master 负责"先调 A 拿数据，再传给 B"，子代理之间不互调

@@ -1,8 +1,8 @@
 """CLI sub-commands for the toolbox agent.
 
-高德全家桶：weather / route / traffic-road / poi / geo / regeo
+高德全家桶：weather / route / transit / metro-near / traffic-road / poi / geo / regeo
 常用地点：where-add / where-list / where-rm
-Mini-tools：calc / units / tz
+Mini-tools：calc / units / tz / summarize-url / recipe
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ from decimal import Decimal
 from typing import Any
 
 from aios.integrations.amap import AmapClient, AmapError
+from aios.integrations.url_fetch import fetch_text
+from aios.llm import chat as llm_chat
 from aios.pg import PgClient
 from aios.toolbox.db import (
     Place,
@@ -651,6 +653,272 @@ async def cmd_tz(args: argparse.Namespace) -> int:
 
 
 # =============================================================================
+# summarize-url — fetch + LLM summary, optional auto-save to mindscape
+# =============================================================================
+
+_SUMMARIZE_SYS = (
+    "你是一个稍后读助手。读用户给你的网页文本，用中文输出 JSON："
+    '{"title": "...", "summary": "200 字以内的摘要", '
+    '"highlights": ["要点1", "要点2", "要点3"], '
+    '"tags": ["标签1", "标签2"]}。'
+    "summary 写人能直接读懂的中文，不要复述原文段落，提炼立场和事实。"
+    "tags 2-4 个，小写中文短词。只输出 JSON，不要任何额外文字。"
+)
+
+
+async def cmd_summarize_url(args: argparse.Namespace) -> int:
+    try:
+        page = await fetch_text(args.url, max_chars=args.max_chars)
+    except Exception as e:
+        print(f"ERROR: fetch failed — {e}", flush=True)
+        return 1
+
+    if page.status >= 400:
+        print(f"ERROR: HTTP {page.status} for {page.final_url}", flush=True)
+        return 1
+
+    if not page.text.strip():
+        print(f"ERROR: empty body after extract — {page.final_url}", flush=True)
+        return 1
+
+    user_msg = (
+        f"网页标题：{page.title or '(无)'}\n"
+        f"网页 URL：{page.final_url}\n\n"
+        f"正文（可能有截断）：\n{page.text}"
+    )
+    try:
+        raw = await llm_chat(
+            [
+                {"role": "system", "content": _SUMMARIZE_SYS},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.2,
+            max_tokens=600,
+            response_format={"type": "json_object"},
+        )
+    except Exception as e:
+        print(f"ERROR: LLM call failed — {e}", flush=True)
+        return 1
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        # Some models include ```json fences despite response_format; strip them.
+        cleaned = raw.strip().lstrip("`").lstrip("json").strip().rstrip("`").strip()
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError:
+            print(f"ERROR: LLM returned non-JSON: {raw[:200]}", flush=True)
+            return 1
+
+    payload = {
+        "url": page.url,
+        "final_url": page.final_url,
+        "fetched_status": page.status,
+        "truncated": page.truncated,
+        "title": parsed.get("title") or page.title,
+        "summary": parsed.get("summary", ""),
+        "highlights": parsed.get("highlights", []),
+        "tags": parsed.get("tags", []),
+    }
+
+    pretty = [
+        f"📄 {payload['title']}",
+        f"🔗 {payload['final_url']}",
+        "",
+        f"摘要：{payload['summary']}",
+    ]
+    if payload["highlights"]:
+        pretty.append("")
+        pretty.append("要点：")
+        for h in payload["highlights"]:
+            pretty.append(f"  · {h}")
+    if payload["tags"]:
+        pretty.append("")
+        pretty.append("标签：" + " / ".join(payload["tags"]))
+    pretty.append("")
+    pretty.append(
+        "↳ 可以让 mindscape 落库：aios mind note "
+        f'"{(payload["summary"] or "")[:60]}..." '
+        f"（手动加 --tags 和 source）"
+    )
+
+    _emit(args, payload, pretty)
+    return 0
+
+
+# =============================================================================
+# recipe — 给定食材推荐菜谱（跨子代理协同：Master 负责先调 steward 拿食材）
+# =============================================================================
+
+_RECIPE_SYS = (
+    "你是一个家庭菜谱助手。根据用户给的现有食材推荐 N 道家常菜。"
+    "中文输出 JSON：{\"dishes\": [{\"name\": \"...\", \"need_extra\": [\"...\"], "
+    "\"steps\": [\"步骤1\", \"步骤2\", ...], \"tags\": [\"快手/家常/汤/...\"]}, ...]}。"
+    "原则："
+    "(1) 优先用上 ingredients 里的东西；"
+    "(2) need_extra 列额外要补的常见调料/辅料，不要把油盐酱醋这种默认都有的列上；"
+    "(3) steps 写 3-6 步可执行的；"
+    "(4) **严格忌口（铁律，违反就重选）**：avoid 列表里的食材**永远不能出现**在 name / need_extra / steps 任意位置；"
+    "类别词扩展：'红肉' 指 猪肉/牛肉/羊肉；'海鲜' 指 虾/蟹/鱼/贝/鱿鱼；'内脏' 指 肝/腰/肠/心；"
+    "'豆制品' 指 豆腐/豆浆/豆干。"
+    "(5) 如果 ingredients 里包含被 avoid 的，**忽略**那些食材，用剩下的做菜，宁可少推一道也不要破例。"
+    "只输出 JSON，不要任何额外文字。"
+)
+
+
+# avoid 类别词扩展（跟 _RECIPE_SYS 里的语义保持一致），用于服务端 post-filter
+_AVOID_EXPAND = {
+    "红肉": ["猪肉", "牛肉", "羊肉"],
+    "海鲜": ["虾", "蟹", "鱼", "贝", "鱿鱼", "蛤", "蛎", "螺", "海鲜"],
+    "内脏": ["肝", "腰", "肠", "心", "肚", "脑", "肺"],
+    "豆制品": ["豆腐", "豆浆", "豆干", "腐竹", "豆皮"],
+}
+
+
+def _expand_avoid(avoid: list[str]) -> list[str]:
+    out: list[str] = []
+    for w in avoid:
+        out.append(w)
+        out.extend(_AVOID_EXPAND.get(w, []))
+    return list(dict.fromkeys(out))
+
+
+def _dish_violates_avoid(dish: dict[str, Any], avoid_words: list[str]) -> str | None:
+    """返回触发的 avoid 词；没违反返回 None。"""
+    blob = " ".join([
+        str(dish.get("name", "")),
+        " ".join(dish.get("need_extra") or []),
+        " ".join(dish.get("steps") or []),
+    ])
+    for w in avoid_words:
+        if w and w in blob:
+            return w
+    return None
+
+
+async def _call_recipe_llm(user_msg: str) -> dict:
+    raw = await llm_chat(
+        [
+            {"role": "system", "content": _RECIPE_SYS},
+            {"role": "user", "content": user_msg},
+        ],
+        temperature=0.6,
+        max_tokens=1200,
+        response_format={"type": "json_object"},
+    )
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        cleaned = raw.strip().lstrip("`").lstrip("json").strip().rstrip("`").strip()
+        return json.loads(cleaned)  # 让外层捕异常
+
+
+async def cmd_recipe(args: argparse.Namespace) -> int:
+    ingredients = [s.strip() for s in args.ingredients.split(",") if s.strip()]
+    if not ingredients:
+        print("ERROR: --ingredients 至少给一个", flush=True)
+        return 1
+    avoid = [s.strip() for s in (args.avoid or "").split(",") if s.strip()]
+    diet = [s.strip() for s in (args.diet or "").split(",") if s.strip()]
+    avoid_expanded = _expand_avoid(avoid)
+
+    # 把被 avoid 命中的 ingredients 自动剔除（"鸡蛋,虾仁" + avoid 海鲜 → "鸡蛋"）
+    ingredients_kept = [
+        ing for ing in ingredients
+        if not any(w in ing for w in avoid_expanded)
+    ]
+    if avoid_expanded and len(ingredients_kept) < len(ingredients):
+        dropped = [ing for ing in ingredients if ing not in ingredients_kept]
+        print(f"WARN: avoid 命中食材 {dropped}，已自动剔除", flush=True)
+    if not ingredients_kept:
+        print("ERROR: avoid 把所有食材都过滤掉了", flush=True)
+        return 1
+
+    user_msg_parts = [
+        f"现有食材：{', '.join(ingredients_kept)}",
+        f"想要 {args.count} 道菜。",
+    ]
+    if avoid_expanded:
+        user_msg_parts.append(
+            f"严格避开（含同类）：{', '.join(avoid_expanded)}。"
+            "这些词不能出现在任何菜名 / 配料 / 步骤里。"
+        )
+    if diet:
+        user_msg_parts.append(f"忌口标签：{', '.join(diet)}（按低嘌呤/低钠/低糖/素食的常识过滤）")
+    if args.style:
+        user_msg_parts.append(f"风格偏好：{args.style}")
+
+    user_msg = "\n".join(user_msg_parts)
+
+    try:
+        parsed = await _call_recipe_llm(user_msg)
+    except Exception as e:
+        print(f"ERROR: LLM call failed — {e}", flush=True)
+        return 1
+
+    dishes = parsed.get("dishes", [])
+
+    # post-filter：剔掉违反 avoid 的菜
+    if avoid_expanded:
+        clean_dishes: list[dict] = []
+        violations: list[tuple[str, str]] = []
+        for d in dishes:
+            v = _dish_violates_avoid(d, avoid_expanded)
+            if v:
+                violations.append((d.get("name", "(无名)"), v))
+            else:
+                clean_dishes.append(d)
+        # 如果全被过滤掉了，重试一次（带更强的提示）
+        if not clean_dishes and violations:
+            retry_msg = user_msg + (
+                "\n\n上一轮你给出的菜全部违反了 avoid 规则（"
+                + "，".join([f"《{n}》含'{w}'" for n, w in violations])
+                + "）。这次必须只用我列出的食材，绝对不要引入 avoid 词。"
+            )
+            try:
+                parsed = await _call_recipe_llm(retry_msg)
+            except Exception as e:
+                print(f"ERROR: LLM retry failed — {e}", flush=True)
+                return 1
+            dishes = parsed.get("dishes", [])
+            clean_dishes = [d for d in dishes if not _dish_violates_avoid(d, avoid_expanded)]
+        dishes = clean_dishes
+
+    payload = {
+        "ingredients": ingredients,
+        "ingredients_used": ingredients_kept,
+        "avoid": avoid,
+        "avoid_expanded": avoid_expanded,
+        "diet": diet,
+        "style": args.style,
+        "count": args.count,
+        "dishes": dishes,
+    }
+
+    pretty = [
+        f"用 {', '.join(ingredients)}" + (f"（避开 {', '.join(avoid)}）" if avoid else "")
+        + (f"，忌口 {', '.join(diet)}" if diet else "") + f"，给你 {len(dishes)} 道菜：",
+        "",
+    ]
+    for i, d in enumerate(dishes, 1):
+        name = d.get("name", "(无名菜)")
+        tags = d.get("tags", [])
+        tags_s = f"  [{' / '.join(tags)}]" if tags else ""
+        pretty.append(f"{i}. {name}{tags_s}")
+        extra = d.get("need_extra") or []
+        if extra:
+            pretty.append(f"   还需要：{', '.join(extra)}")
+        steps = d.get("steps") or []
+        for j, s in enumerate(steps, 1):
+            pretty.append(f"   {j}) {s}")
+        pretty.append("")
+
+    _emit(args, payload, pretty)
+    return 0
+
+
+# =============================================================================
 # Argparse wiring
 # =============================================================================
 
@@ -739,7 +1007,7 @@ def add_subparsers(parent_sub: argparse._SubParsersAction) -> None:
     p_wr.add_argument("--json", action="store_true")
 
     # calc
-    p_c = sub.add_parser("calc", help="算式（仅 + - * / ** % // 和数字）")
+    p_c = sub.add_parser("calc", help="算式（仅 + - * / ** %% // 和数字）")
     p_c.add_argument("expression")
     p_c.add_argument("--json", action="store_true")
 
@@ -760,6 +1028,32 @@ def add_subparsers(parent_sub: argparse._SubParsersAction) -> None:
                       help="目标时区列表，默认 SH/NY/LA/LON/BER/TYO/UTC")
     p_tz.add_argument("--json", action="store_true")
 
+    # summarize-url
+    p_sm = sub.add_parser(
+        "summarize-url",
+        help="抓网页 + LLM 摘要（中文），可手动转给 mind note 落库做'稍后读'",
+    )
+    p_sm.add_argument("url", help="完整 URL，含 http(s)://")
+    p_sm.add_argument("--max-chars", type=int, default=12000,
+                      help="正文截断长度（默认 12000，太大浪费 token）")
+    p_sm.add_argument("--json", action="store_true")
+
+    # recipe
+    p_rp = sub.add_parser(
+        "recipe",
+        help="根据食材推荐 N 道菜（跨子代理：Master 先调 steward 拿冰箱食材再传给我）",
+    )
+    p_rp.add_argument("--ingredients", required=True,
+                      help='逗号分隔的食材，如 "鸡蛋,西红柿,土豆"')
+    p_rp.add_argument("--avoid", default=None,
+                      help='逗号分隔的要避开的食材，如 "海鲜,内脏"')
+    p_rp.add_argument("--diet", default=None,
+                      help='逗号分隔的忌口标签，如 "低嘌呤,低钠"（来自 USER.md）')
+    p_rp.add_argument("--style", default=None,
+                      help="风格偏好，如 '快手' / '清淡' / '川菜'")
+    p_rp.add_argument("--count", type=int, default=3, help="返回菜品数（默认 3）")
+    p_rp.add_argument("--json", action="store_true")
+
 
 HANDLERS = {
     "ping": cmd_ping,
@@ -777,6 +1071,8 @@ HANDLERS = {
     "calc": cmd_calc,
     "units": cmd_units,
     "tz": cmd_tz,
+    "summarize-url": cmd_summarize_url,
+    "recipe": cmd_recipe,
 }
 
 

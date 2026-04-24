@@ -38,3 +38,11 @@
 {"query": "国贸地铁站到望京 SOHO 多远", "expected": "toolbox"}
 {"query": "我家方圆 500 米有几个地铁站", "expected": "toolbox"}
 {"query": "末班车几点", "expected": "self", "rationale": "高德 transit 不返回首末班实时数据，让 LLM 直答或建议查官方"}
+{"query": "稍后读 https://example.com/post", "expected": "toolbox"}
+{"query": "这个文章讲了啥 https://www.example.com/x", "expected": "toolbox"}
+{"query": "帮我看下这个链接的内容", "expected": "toolbox"}
+{"query": "把这篇文章存到我的备忘", "expected": "toolbox"}
+{"query": "今晚吃啥", "expected": "toolbox"}
+{"query": "用 西红柿 鸡蛋 土豆 能做什么", "expected": "toolbox"}
+{"query": "推荐 3 道清淡家常菜", "expected": "toolbox"}
+{"query": "冰箱里东西能做啥", "expected": "toolbox"}

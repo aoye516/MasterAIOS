@@ -17,3 +17,10 @@
 {"query": "怎么坐地铁去望京 SOHO", "routed_to": "toolbox", "rationale": "transit with address"}
 {"query": "最近的地铁站在哪", "routed_to": "toolbox", "rationale": "metro-near"}
 {"query": "公司附近的地铁口", "routed_to": "toolbox", "rationale": "metro-near alias"}
+{"query": "这个文章帮我看一下讲了啥 https://example.com/post", "routed_to": "toolbox", "rationale": "summarize-url, just read"}
+{"query": "帮我把这个链接存一下 https://news.ycombinator.com/item?id=1", "routed_to": "toolbox", "rationale": "summarize-url then mind note (master orchestrates)"}
+{"query": "稍后读：https://example.com/article", "routed_to": "toolbox", "rationale": "summarize-url"}
+{"query": "今晚吃啥", "routed_to": "toolbox", "rationale": "recipe — master should first ask steward for fridge inventory"}
+{"query": "用鸡蛋和西红柿能做什么菜", "routed_to": "toolbox", "rationale": "recipe with explicit ingredients"}
+{"query": "推荐 3 道家常菜，要清淡的", "routed_to": "toolbox", "rationale": "recipe with style"}
+{"query": "冰箱里有啥能做什么", "routed_to": "toolbox", "rationale": "recipe — needs steward inventory first"}
