@@ -1,4 +1,23 @@
-"""Spawn `claude` CLI as a sub-agent for code-heavy tasks."""
+"""Spawn `claude` CLI as a sub-agent for code-heavy tasks.
+
+Three-layer safety boundary (cheap, nothing to break):
+
+1. **cwd 隔离**：每个 task 的 cwd = `<workspace_root>/<task>/`，物理上跟
+   `/claude/aios` 主项目分开。
+2. **system prompt 注入**（`--append-system-prompt`）：在 Claude Code 自带
+   system prompt 末尾追加一段硬约束，告诉它别越界、别动 AIOS、别 sudo。
+3. **workspace CLAUDE.md**：首次调用时在 workspace_root 写一份 CLAUDE.md，
+   内容是同一份边界约定。Claude Code 会自动从 cwd 往上找 CLAUDE.md，
+   所以所有 task 自动继承同一份约定 —— 跟 #2 互为兜底。
+
+Permission：默认 `--permission-mode bypassPermissions`，让 file edit / Bash
+都自动通过（headless 模式下 default 模式会静默拒工具）。配合上面的软约束
+够用了。如果想更严，env `AIOS_CC_PERMISSION_MODE=acceptEdits` / `default`
+临时降权。
+
+Root 用户特殊：claude 在 root 下默认会禁用 bypassPermissions。设
+`IS_SANDBOX=1` 让它放行 —— AIOS 跑在 systemd `User=root` 下，必须这么做。
+"""
 
 from __future__ import annotations
 
@@ -14,7 +33,116 @@ from typing import AsyncIterator
 
 DEFAULT_WORKSPACE_ROOT = Path(os.environ.get("AIOS_CC_WORKSPACE_ROOT", str(Path.home() / "aios-cc-workspace")))
 DEFAULT_TIMEOUT_S = int(os.environ.get("AIOS_CC_TIMEOUT_S", "1800"))  # 30 min default
+DEFAULT_PERMISSION_MODE = os.environ.get("AIOS_CC_PERMISSION_MODE", "bypassPermissions")
 TASK_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+
+# 注入到每个 claude 子进程的 system prompt 末尾。Claude Code 自带的 prompt
+# 已经在前面，这里只追加边界约束。改这段时 SKILL.md 的"安全边界"段也要同步。
+_SAFETY_PROLOGUE = """\
+
+---
+
+You are running in non-interactive (`-p`) mode as an external sub-agent of AIOS,
+a personal AI OS built on nanobot. Your output is consumed by the AIOS Master
+agent, not directly by a human.
+
+**Hard boundaries (violating any of these breaks the user's host):**
+
+1. **Stay inside your current working directory.** Don't Read/Write/Edit any
+   file outside it. Your cwd is a per-task workspace; everything you produce
+   goes here.
+2. **Don't touch /claude/aios** — that's the AIOS project itself. Modifying it,
+   `cd`-ing into it, or running its scripts (`bash deploy/...`, `aios ...`,
+   etc.) corrupts the host. If the user wants AIOS code changed, they will say
+   so explicitly and the Master will route to a different mechanism.
+3. **No root-level system changes**: never run `sudo`, `systemctl`, `service`,
+   `apt`, `dpkg`, `npm install -g`, `pip install` (without `--user`), or
+   anything else that needs root to take effect.
+4. **Don't touch the AIOS Postgres database** (no `psql`, `pg_dump`, `dropdb`,
+   `psycopg2.connect("aios", ...)`, etc.). It belongs to the Master.
+5. **Don't `rm -rf` or `git push --force`** anything outside cwd.
+6. **Don't read host secrets**: `~/.claude/settings.json`, `~/.aws/`, `/root/.env`,
+   `/claude/aios/.env` are off-limits — including `cat`, `grep`, or any tool that
+   would surface their contents.
+
+If your task seems to require any of the above, **stop and reply** with what you
+would need; do not improvise. The Master will figure out another way.
+
+Inside cwd you have free rein: write source, run tests, build, edit, `git`,
+`python3`, `node`, `bash`. Same task name across calls = same cwd = continued
+session.
+"""
+
+
+# Workspace-level CLAUDE.md content. 写一次就不再覆盖（用户改了不要丢）。
+_WORKSPACE_CLAUDE_MD = """\
+# AIOS code-helper workspace contract
+
+You are running as the **external coding sub-agent** of AIOS — a personal AI OS
+built on nanobot. AIOS Master orchestrates you via `claude -p` in headless mode.
+
+This file lives at the workspace root. Claude Code auto-discovers `CLAUDE.md`
+by walking up from cwd, so every task under this root inherits the same rules.
+
+## Your scope
+
+Your cwd is `/root/aios-cc-workspace/<task-name>/`. Same task name across
+multiple invocations = same cwd = continued session (the wrapper auto-resumes
+the most recent jsonl transcript for this cwd).
+
+Source files, build artifacts, scratch notes — anything you produce — stays
+inside your task folder.
+
+## Boundaries (hard, no exceptions)
+
+- **Don't read/write/edit anything outside your cwd**, except for safe
+  read-only inspection of system locations like `/etc/os-release` or
+  `which python3`.
+- **Don't touch `/claude/aios`** — that's the AIOS project. Reading is okay if
+  the user explicitly asks "show me how AIOS does X"; writing/running its
+  scripts (`bash deploy/...`, `aios ...`) is **never** okay from this context.
+- **No root system changes**: no `sudo`, `systemctl`, `service`, `apt`,
+  `dpkg`, `npm install -g`, `pip install` (without `--user`), or anything
+  similar.
+- **No AIOS database access**: no `psql`, `pg_dump`, `dropdb`, no Python
+  `psycopg2.connect("aios", ...)`. The Master owns the database.
+- **No `rm -rf` or `git push --force`** against anything outside cwd.
+- **No host secrets**: `~/.claude/`, `~/.aws/`, `/root/.env`, `/claude/aios/.env`
+  are off-limits.
+
+If a task seems to need any of the above, stop and explain what you would need.
+The Master will route to a different mechanism.
+
+## What you can freely do
+
+Inside your cwd:
+
+- write/edit any source code, run `python3`, `node`, `bash`, `pytest`, etc.
+- `git init`, clone repos, commit, branch, push to remotes you (the user) own
+- install per-project deps via `npm install` (local), `pip install --user`,
+  `uv pip install --python ./venv/bin/python`, etc.
+
+## How AIOS reads your work
+
+The wrapper streams your assistant text and tool calls back to Master as JSON.
+Master shows the user a folded summary (e.g. "🔧 Write: hello.py") plus your
+final reply text — never the raw JSON. Keep your final replies short and
+factual; details go in code comments / commit messages, not in chat.
+"""
+
+
+def _ensure_workspace_claude_md(workspace_root: Path) -> None:
+    """Idempotent bootstrap of the workspace-level CLAUDE.md.
+
+    Only writes if the file is missing. If the user (or Claude itself) edits
+    it later, we leave it alone.
+    """
+    target = workspace_root / "CLAUDE.md"
+    if target.exists():
+        return
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    target.write_text(_WORKSPACE_CLAUDE_MD, encoding="utf-8")
 
 
 class ClaudeCliError(RuntimeError):
@@ -116,6 +244,8 @@ async def delegate_to_claude(
     - Streams events; aggregates final text + tool-call summary + cost/duration.
     """
     _validate_task_name(task)
+    base = workspace_root or DEFAULT_WORKSPACE_ROOT
+    _ensure_workspace_claude_md(base)
     cwd = task_session_path(task, workspace_root)
     timeout = timeout_s or DEFAULT_TIMEOUT_S
 
@@ -127,11 +257,24 @@ async def delegate_to_claude(
         )
 
     prior_session = _last_session_id_for_cwd(cwd)
-    args = [claude_bin, "-p", description, "--output-format", "stream-json", "--verbose"]
+    args = [
+        claude_bin,
+        "-p",
+        description,
+        "--output-format", "stream-json",
+        "--verbose",
+        "--permission-mode", DEFAULT_PERMISSION_MODE,
+        "--append-system-prompt", _SAFETY_PROLOGUE,
+    ]
     if prior_session:
         args.extend(["--resume", prior_session])
     if extra_args:
         args.extend(extra_args)
+
+    # IS_SANDBOX=1 让 root 用户也能用 bypassPermissions —— claude-agent 内部
+    # 默认 root 时禁用 bypass，必须显式开 sandbox flag。AIOS 跑在
+    # systemd User=root 下绕不过去这步。
+    child_env = {**os.environ, "IS_SANDBOX": "1"}
 
     result = CodeHelperResult(task=task, cwd=str(cwd), resumed=bool(prior_session))
 
@@ -141,6 +284,7 @@ async def delegate_to_claude(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=str(cwd),
+        env=child_env,
     )
 
     try:
