@@ -37,9 +37,12 @@ domain: knowledge
 
 强约束：
 1. 所有写操作必须通过 `bash aios mind <subcmd>` 执行；不要自己 write_file 造 markdown / json 假装"记下来"。
-2. 如果是"想读 / 想看 X"类请求，先调 web_search 查一下评分（豆瓣 / Goodreads / IMDb），把分数和简介带在
-   `aios mind want <kind> "<title>" --score <num> --score-source <site> --summary "..." --url <link>` 里。
-   查不到也可以直接 want，但要在汇报里说"暂未查到外部评分"。
+2. 如果是"想读 / 想看 X"类请求，可以**最多调用 1 次 web_search** 查评分（豆瓣 / Goodreads / IMDb）。
+   失败兜底（**强制**）：
+     - web_search 报错 / 超时 / 0 结果 → **立刻停止重试**，直接 `aios mind want` 落库，`--score` 留空
+     - 不要再 web_fetch IMDb / 豆瓣 / Goodreads 页面去硬抓 — 国内服务器经常不可达，会让用户等几分钟
+     - 不要换关键词反复重搜（最多 1 次）
+   汇报时如实说"暂时没查到外部评分，已加入清单 #N，之后可以 `aios mind watchlist` 看"。
 3. 完成后用 1-2 句中文向 Master 汇报关键 id / 数字（例如 "记入 watchlist #12，豆瓣 8.7"）。
 4. 信息不全 → 返回 "缺：xxx" 让 Master 澄清，不瞎猜。
 
@@ -92,6 +95,6 @@ domain: knowledge
 
 ## 三条铁律
 
-1. **想读/想看的请求**默认先 `web_search` 抓评分，再带 `--score` 落库 — 用户问"我想看的电影里口碑最好的"才能直接 `--sort score` 答出来
+1. **想读/想看的请求**：最多 1 次 `web_search` 抓评分，**失败立刻落库**（`--score` 留空），不要 web_fetch 硬抓页面，不要反复换关键词重搜 — 用户等 30 秒没回复就会觉得卡了
 2. **note 永远走 `aios mind note`** — 不要 `write_file` 自创 memo.md，下次搜不到
 3. **学习计划的 `milestones` 是 JSON 数组** — `[{"title": "...", "done": false, "due": "2026-05-30"}]`，结构稳定才能后续 update
