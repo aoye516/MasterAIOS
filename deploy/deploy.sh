@@ -39,7 +39,10 @@ case "$MODE" in
     [ "$MODE" = "dry" ] && EXTRA+=("--dry-run")
 
     echo "→ rsync (no --delete) ..."
-    rsync -avz "${EXTRA[@]}" \
+    # rsync exit 23 = partial transfer（典型场景：vendor/nanobot/.git 是 file 不是 dir，
+    # rsync 警告但其实业务文件已经传完）。所以容忍 23，0/23 都算成功。
+    rc=0
+    rsync -avz ${EXTRA[@]+"${EXTRA[@]}"} \
       --exclude='.git/' \
       --exclude='.venv/' \
       --exclude='__pycache__/' \
@@ -62,7 +65,13 @@ case "$MODE" in
       --exclude='vendor/nanobot/.git/' \
       --exclude='vendor/nanobot/__pycache__/' \
       --exclude='legacy/' \
-      ./ "$REMOTE:$REMOTE_PATH/"
+      ./ "$REMOTE:$REMOTE_PATH/" || rc=$?
+
+    if [ "$rc" -ne 0 ] && [ "$rc" -ne 23 ]; then
+      echo "rsync 致命失败 (exit $rc)" >&2
+      exit "$rc"
+    fi
+    [ "$rc" = 23 ] && echo "→ rsync exit 23（partial transfer 警告，已忽略）"
 
     if [ "$MODE" = "dry" ]; then
       echo
