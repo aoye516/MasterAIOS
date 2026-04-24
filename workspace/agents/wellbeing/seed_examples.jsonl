@@ -1,0 +1,19 @@
+{"query": "今天穿什么合适", "routed_to": "wellbeing", "rationale": "morning brief / dressing advice"}
+{"query": "早上播报一下天气和穿衣", "routed_to": "wellbeing", "rationale": "morning brief"}
+{"query": "每天早上 8 点给我播报今天天气和穿衣", "routed_to": "wellbeing", "rationale": "schedule morning brief via cron"}
+{"query": "早安，给我来一份小播报", "routed_to": "wellbeing", "rationale": "morning brief manual"}
+{"query": "晨跑打卡", "routed_to": "wellbeing", "rationale": "habit checkin"}
+{"query": "今天跑了 30 分钟", "routed_to": "wellbeing", "rationale": "habit checkin with notes"}
+{"query": "我吃药了", "routed_to": "wellbeing", "rationale": "habit checkin medication"}
+{"query": "已经喝了第 5 杯水", "routed_to": "wellbeing", "rationale": "habit checkin counted"}
+{"query": "我想养成每天拉伸的习惯", "routed_to": "wellbeing", "rationale": "habit add new"}
+{"query": "帮我加一个工作日早上 7 点起床的习惯", "routed_to": "wellbeing", "rationale": "habit add with schedule + reminder"}
+{"query": "看一下我今天有哪些习惯还没打卡", "routed_to": "wellbeing", "rationale": "habit-list with today progress"}
+{"query": "晨跑连续多少天了", "routed_to": "wellbeing", "rationale": "habit-streak"}
+{"query": "我体重 70.5 公斤", "routed_to": "wellbeing", "rationale": "log weight"}
+{"query": "刚测了血压 130/85", "routed_to": "wellbeing", "rationale": "log blood_pressure_sys + dia"}
+{"query": "今早尿酸 460", "routed_to": "wellbeing", "rationale": "log uric_acid"}
+{"query": "昨晚睡了 6 个小时", "routed_to": "wellbeing", "rationale": "log sleep_hours"}
+{"query": "最近一个月体重变化", "routed_to": "wellbeing", "rationale": "log-stats weight 30d"}
+{"query": "看看我尿酸最近的趋势", "routed_to": "wellbeing", "rationale": "log-stats uric_acid"}
+{"query": "把跑步习惯先暂停一下", "routed_to": "wellbeing", "rationale": "habit-pause"}

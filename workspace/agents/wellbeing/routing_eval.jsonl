@@ -1,0 +1,40 @@
+{"query": "今天穿什么", "expected": "wellbeing"}
+{"query": "今天穿厚衣服还是薄外套", "expected": "wellbeing"}
+{"query": "早上播一下今天小播报", "expected": "wellbeing"}
+{"query": "每天早上 8 点告诉我天气和穿衣", "expected": "wellbeing"}
+{"query": "早安播报", "expected": "wellbeing"}
+{"query": "现在该穿什么", "expected": "wellbeing"}
+{"query": "外面冷不冷", "expected": "wellbeing"}
+{"query": "今天天气适合穿短袖吗", "expected": "wellbeing"}
+{"query": "晨跑打卡", "expected": "wellbeing"}
+{"query": "我跑完步了", "expected": "wellbeing"}
+{"query": "今天跑了 5 公里", "expected": "wellbeing"}
+{"query": "已经吃药了", "expected": "wellbeing"}
+{"query": "刚才喝了一杯水", "expected": "wellbeing"}
+{"query": "今天第 3 杯水", "expected": "wellbeing"}
+{"query": "做完拉伸了", "expected": "wellbeing"}
+{"query": "我想加一个每天看英语 20 分钟的习惯", "expected": "wellbeing"}
+{"query": "帮我建一个工作日早起的习惯", "expected": "wellbeing"}
+{"query": "新加个每周三次健身的目标", "expected": "wellbeing"}
+{"query": "今天有哪些习惯没打", "expected": "wellbeing"}
+{"query": "我所有的习惯", "expected": "wellbeing"}
+{"query": "晨跑连续了几天", "expected": "wellbeing"}
+{"query": "看一下我跑步的连续记录", "expected": "wellbeing"}
+{"query": "拉伸最近的打卡", "expected": "wellbeing"}
+{"query": "把跑步习惯暂停", "expected": "wellbeing"}
+{"query": "归档读书习惯", "expected": "wellbeing"}
+{"query": "我体重 70 公斤", "expected": "wellbeing"}
+{"query": "记一下我现在体重 71.2", "expected": "wellbeing"}
+{"query": "尿酸 480", "expected": "wellbeing"}
+{"query": "血压 128 / 82", "expected": "wellbeing"}
+{"query": "心率 68", "expected": "wellbeing"}
+{"query": "昨晚睡了 7 小时", "expected": "wellbeing"}
+{"query": "我今天走了 8500 步", "expected": "wellbeing"}
+{"query": "心情不错记 4", "expected": "wellbeing"}
+{"query": "查下我最近一周血压", "expected": "wellbeing"}
+{"query": "近一个月体重平均多少", "expected": "wellbeing"}
+{"query": "尿酸最近趋势", "expected": "wellbeing"}
+{"query": "睡眠平均时长", "expected": "wellbeing"}
+{"query": "上周喝水打卡情况", "expected": "wellbeing"}
+{"query": "查我所有体重记录", "expected": "wellbeing"}
+{"query": "近 90 天血压最高最低", "expected": "wellbeing"}
