@@ -97,17 +97,34 @@ async def cmd_notes(args: argparse.Namespace) -> int:
                 print(f"WARN: embed failed ({e}); falling back to fulltext", flush=True)
 
     async with PgClient() as pg:
-        rows = await search_archival(
-            pg, args.query or "", user_id=args.user_id,
-            embedding=embedding, limit=args.limit,
-        )
-    rows = [r for r in rows if r.get("content_type") == "note"]
+        # search_archival empty-query path raises; fall back to a generic listing
+        if not args.query:
+            async with pg.acquire() as conn:
+                raw = await conn.fetch(
+                    "SELECT id, user_id, content, content_type, metadata, created_at, "
+                    "       NULL::float AS score "
+                    "FROM archival_memory "
+                    "WHERE content_type = 'note' "
+                    "  AND ($1::int IS NULL OR user_id = $1) "
+                    "ORDER BY created_at DESC LIMIT $2",
+                    args.user_id, args.limit,
+                )
+            rows = [dict(r) for r in raw]
+        else:
+            rows_obj = await search_archival(
+                pg, args.query, user_id=args.user_id,
+                embedding=embedding, limit=args.limit * 3,
+            )
+            rows = [r.to_dict() for r in rows_obj]
+            rows = [r for r in rows if r.get("content_type") == "note"][:args.limit]
+
     pretty = ["(no notes matched)"] if not rows else []
     for r in rows:
-        snippet = (r["content"] or "").strip().replace("\n", " ")
+        snippet = (r.get("content") or "").strip().replace("\n", " ")
         if len(snippet) > 120:
             snippet = snippet[:117] + "..."
-        score = float(r["score"]) if r.get("score") is not None else 0.0
+        score_val = r.get("score")
+        score = float(score_val) if score_val is not None else 0.0
         pretty.append(f"  #{r['id']} [{score:.3f}] {snippet}")
     _emit(args, rows, pretty)
     return 0
