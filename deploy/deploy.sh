@@ -97,11 +97,17 @@ cd /claude/aios
 # 同步 vendor/nanobot 到本地登记的 commit
 git submodule update --init --recursive
 
-# editable 安装会自动 pick up vendor/nanobot 的变化
-if [ -d .venv ]; then
-  source .venv/bin/activate
-  uv pip install -e vendor/nanobot >/dev/null
-  uv pip install -e . >/dev/null
+# uv 在非交互 ssh 里通常不在 PATH 里 —— 自己找一下
+UV="$(command -v uv || true)"
+[ -z "$UV" ] && [ -x /root/.local/bin/uv ]   && UV=/root/.local/bin/uv
+[ -z "$UV" ] && [ -x /root/.cargo/bin/uv ]   && UV=/root/.cargo/bin/uv
+[ -z "$UV" ] && [ -x /usr/local/bin/uv ]     && UV=/usr/local/bin/uv
+
+if [ -z "$UV" ]; then
+  echo "WARN: 找不到 uv，跳过 pip install。如果有新依赖请手动 ssh 进去装。" >&2
+elif [ -d .venv ]; then
+  "$UV" pip install --python .venv/bin/python -e vendor/nanobot >/dev/null
+  "$UV" pip install --python .venv/bin/python -e . >/dev/null
 fi
 REMOTE_EOF
 

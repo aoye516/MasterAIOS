@@ -797,21 +797,30 @@ def _dish_violates_avoid(dish: dict[str, Any], avoid_words: list[str]) -> str | 
     return None
 
 
-async def _call_recipe_llm(user_msg: str) -> dict:
-    raw = await llm_chat(
-        [
-            {"role": "system", "content": _RECIPE_SYS},
-            {"role": "user", "content": user_msg},
-        ],
-        temperature=0.6,
-        max_tokens=1200,
-        response_format={"type": "json_object"},
-    )
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        cleaned = raw.strip().lstrip("`").lstrip("json").strip().rstrip("`").strip()
-        return json.loads(cleaned)  # 让外层捕异常
+async def _call_recipe_llm(user_msg: str, *, attempts: int = 2) -> dict:
+    """LLM 偶尔会吐 malformed JSON（漏逗号/截断）。失败重试一次。"""
+    last_err: Exception | None = None
+    for _ in range(attempts):
+        raw = await llm_chat(
+            [
+                {"role": "system", "content": _RECIPE_SYS},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.6,
+            max_tokens=1200,
+            response_format={"type": "json_object"},
+        )
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            last_err = e
+            cleaned = raw.strip().lstrip("`").lstrip("json").strip().rstrip("`").strip()
+            try:
+                return json.loads(cleaned)
+            except json.JSONDecodeError as e2:
+                last_err = e2
+                continue
+    raise RuntimeError(f"LLM 连续返回非法 JSON：{last_err}")
 
 
 async def cmd_recipe(args: argparse.Namespace) -> int:
