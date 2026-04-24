@@ -117,7 +117,7 @@ ssh "$REMOTE" "systemctl restart $SERVICE"
 
 sleep 3
 echo
-echo "→ 远程：systemctl status $SERVICE（最后 20 行日志）"
+echo "→ 远程：systemctl status ${SERVICE}（最后 20 行日志）"
 ssh "$REMOTE" "systemctl status $SERVICE --no-pager -l | head -25; echo '---'; journalctl -u $SERVICE -n 20 --no-pager"
 
 echo
