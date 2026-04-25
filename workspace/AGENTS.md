@@ -153,23 +153,38 @@ aios code-helper start <kebab-case-name> "<完整任务描述>" [--timeout 1800]
 
 > 📤 已派给 Claude Code 处理 task=`<task-name>`（pid xxx）
 > 工作目录：`~/aios-cc-workspace/<task>/`
-> 估计 N 分钟，我每分钟会跟你同步一次进度，完成 / 失败 / 需要你确认时会立刻告诉你。
+> 估计 N 分钟。我会在后台每 2 分钟看一次进度，**只在有重要进展 / 完成 / 失败 / 需要你确认时**才打扰你。
 >
 > 📎 CC task: **<task-name>**
 
-**3) 注册 1 分钟一次的 cron poll 回调**：
+**3) 注册 2 分钟一次的 cron poll 回调**（`*/2 * * * *`，≈100s。**不要用 `*/1`**——
+之前每分钟轰炸用户被反馈太频繁；2 分钟是标准 cron 粒度里最接近 100 秒的）：
 
-用 nanobot 的 `cron` 工具 schedule 一条 `*/1 * * * *` 的任务，message 写：
+用 nanobot 的 `cron` 工具 schedule 一条 `*/2 * * * *` 的任务，message 写：
 
-> 【CC poll · `<task-name>`】运行 `aios code-helper poll <task-name>`，把输出原样转给用户。
-> - 如果输出含 `[DONE]` → 转给用户 + 调用 cron remove 取消这条 cron
-> - 如果输出含 `[FAILED]` / `[CANCELLED]` → 转给用户 + cron remove
-> - 如果输出含 `[NEEDS_CONFIRMATION]` → 把 CC 在问的问题转给用户，cron 保留；
->   等用户回复后用 `aios code-helper start <task-name> "<用户的回复>"` 续接
-> - 如果输出含 `[RUNNING]` → 转给用户作为进度同步，cron 保留
+> 【CC poll · `<task-name>`】运行 `aios code-helper poll <task-name>`，根据输出判断**是否值得打扰用户**：
+> - `[DONE]` → 必须转给用户 + 调用 cron remove 取消这条 cron
+> - `[FAILED]` / `[CANCELLED]` → 必须转给用户 + cron remove
+> - `[NEEDS_CONFIRMATION]` → 必须把 CC 在问的问题转给用户，cron 保留；用户回复后用
+>   `aios code-helper start <task-name> "<用户的回复>"` 续接
+> - `[RUNNING]` → **默认沉默**。心里跟上一次轮询比一比，只在出现下面任一**重要进展**时
+>   才转给用户：(a) 新写了文件 (b) 出现新类别的工具调用 (c) CC final_text_preview 有
+>   实质性更新 (d) 跑了 > 5 分钟（每 5 min 同步一次"还在跑"就够了）。
+>   否则**什么都不发**、cron 保留、下次再看。
 
 **这条 cron 必须在每个 `start` 之后立刻注册。** 看到 `[DONE]/[FAILED]/[CANCELLED]`
 就 cron remove，不要让它一直 poll 已完成任务。
+
+#### 关键不变量（避免之前 3d-rubiks-cube 那种乌龙）
+
+- **watcher 一直 alive 是正常的**。`status=running` + `pid` 还在 → CC 还在干活，可能在写
+  代码、跑测试、想问题。绝不要手动 `kill <pid>`。需要中止用 `aios code-helper cancel`，
+  且仅在用户**明确说**"算了别做了"时才用。
+- **端口监听 ≠ 任务完成**。CC 经常先启动 web server 再继续写 README / 测试 / 总结。
+  判断完成的**唯一信号**是 `aios code-helper poll` 输出里出现 `[DONE]` 或 `[FAILED]`。
+  只看 `ps`、`netstat`、`curl` 都会误判，导致提前杀 watcher、用户拿不到完整结果。
+- **CC 部署后台服务时，prompt 里要明确要求"用 `nohup ... &` + `disown` 解耦，验证一次
+  路由后正常退出"**。否则 CC 不敢退出，watcher 永远 running。
 
 #### 用户没等到 cron 又来催"咋样了"
 

@@ -1,6 +1,6 @@
 ---
 name: code_helper
-description: 【MUST USE】写代码 / 改文件 / 跑命令 / 部署小工具的任务一律走这里 —— 委托给本机 Claude Code CLI（接的是火山 ARK coding plan，比 Master 主 API 便宜得多）。**新工作流是非阻塞的：start 派任务 → 立刻给用户反馈 → cron 每分钟 poll 一次 → 看到 [DONE]/[FAILED]/[NEEDS_CONFIRMATION] 再处理**。绝对不要再用旧的 `--task X "desc"` 同步形式（会被 nanobot 的 120s 超时杀掉）。
+description: 【MUST USE】写代码 / 改文件 / 跑命令 / 部署小工具的任务一律走这里 —— 委托给本机 Claude Code CLI（接的是火山 ARK coding plan，比 Master 主 API 便宜得多）。**新工作流是非阻塞的：start 派任务 → 立刻给用户反馈 → cron 每 2 分钟 poll 一次（只在有重要进展 / 完成 / 失败 / 需确认时才打扰用户）→ 看到 [DONE]/[FAILED]/[NEEDS_CONFIRMATION] 再处理**。绝对不要再用旧的 `--task X "desc"` 同步形式（会被 nanobot 的 120s 超时杀掉）。**watcher 进程在 CC 退出前一直 alive 是正常的，绝不要手动 `kill` 它**——只用 `aios code-helper cancel`，且仅在用户明确要求中止时才用。
 metadata: {"nanobot":{"emoji":"🛠️","requires":{"bins":["aios","claude"]}}}
 ---
 
@@ -63,29 +63,43 @@ aios code-helper start <task-name> "<完整任务描述>" [--timeout 1800] --jso
 
 **这一步 < 1 秒**。watcher 已经在后台 spawn 了 `claude -p`，CC 开始干活了。
 
-### Step 2 — 立刻给用户反馈 + 注册 1 分钟 cron poll
+### Step 2 — 立刻给用户反馈 + 注册 2 分钟 cron poll
 
 **先给用户一段反馈消息**，让他知道你已经派出去了、大概要多久、以后什么节奏给他汇报：
 
 > 📤 已派给 Claude Code 处理：task=`pomodoro-tool`（pid 13524）
 > 工作目录在服务器 `~/aios-cc-workspace/pomodoro-tool/`
-> 估计 3-8 分钟，我每分钟会跟你同步一次进度，完成 / 失败 / 需要你确认时会立刻告诉你。
+> 估计 3-8 分钟。我会在后台每 2 分钟看一次进度，**只在有重要进展 / 完成 / 失败 / 需要你确认时**才打扰你。
 
-**然后立即用 `cron` 工具注册一个每分钟一次的 poll 回调**：
+**然后立即用 `cron` 工具注册一个每 2 分钟一次的 poll 回调**（`*/2 * * * *` ≈ 100s，是
+标准 cron 粒度里最接近 100 秒的；不要用更频繁的 `*/1`，会让我焦虑、过度诊断、瞎介入）：
 
 ```text
 cron schedule:
-  expression:  */1 * * * *
+  expression:  */2 * * * *
   message:     【CC poll · pomodoro-tool】运行 `aios code-helper poll pomodoro-tool`，
-               把输出原样转给用户。
-               • 如果输出含 [DONE] → 转给用户 + 调用 cron remove 取消这条 cron
-               • 如果输出含 [FAILED] / [CANCELLED] → 转给用户 + cron remove
-               • 如果输出含 [NEEDS_CONFIRMATION] → 把 CC 在问的问题转给用户，cron 保留
-                 等用户回复后用 `aios code-helper start pomodoro-tool "<用户的回复>"` 续接
-               • 如果输出含 [RUNNING] → 转给用户作为进度同步，cron 保留
+               根据输出判断是否值得打扰用户：
+               • [DONE] / [FAILED] / [CANCELLED] → 必须转给用户 + cron remove
+               • [NEEDS_CONFIRMATION] → 必须转给用户（把 CC 在问的问题转过去），cron 保留；
+                 用户回复后用 `aios code-helper start pomodoro-tool "<用户的回复>"` 续接
+               • [RUNNING] → 心里默默对比上一次轮询，**只在有"重要进展"时**才转给用户：
+                 - 新写了文件 (files_written 增加)
+                 - 新跑了一类不同的工具 (出现新的 Bash/Write/Edit 类别)
+                 - CC 的 final_text_preview 有实质性更新（不是空 / 不是和上次相同）
+                 - 跑了 > 5 分钟还没完成（每 5 min 同步一次"还在跑，已 X 分钟"就够了）
+                 否则**沉默**——不发消息、不调任何工具、cron 保留，下次再看。
+                 用户没问起的"心跳式"汇报是噪音，他不喜欢。
 ```
 
 > 具体 cron 工具的参数语法看 nanobot 的 `cron` skill；上面是语义描述，不是字面命令。
+
+**关键不变量**：
+- watcher 进程（runner.py）会一直 alive 直到 `claude` 自己退出。看到 `pid` 还在、status 还
+  是 `running` 是**完全正常**的——CC 可能正在写代码、跑测试、想问题。**绝不要手动**
+  `kill <pid>` watcher。如果用户明确说"算了别做了"，用 `aios code-helper cancel <task>`。
+- **端口监听 ≠ 任务完成**。CC 经常在任务里启动一个 web server / 后台进程然后继续写
+  README 或测试。判断完成的**唯一标准是 `aios code-helper poll` 输出里出现 `[DONE]` 或
+  `[FAILED]`**。只看 `ps`、`netstat`、`curl` 都会误判。
 
 ### Step 3 — cron 触发时 poll，按标记决定
 
@@ -144,7 +158,11 @@ aios code-helper poll <task-name>
 ```
 
 > **看到 `[DONE]` / `[FAILED]` / `[CANCELLED]` 就 cron remove 那条回调**，否则
-> 它会一直 poll 一个已完成任务，浪费每分钟一次的执行。
+> 它会一直 poll 一个已完成任务，浪费每 2 分钟一次的执行。
+
+> **`[RUNNING]` 不是"必须给用户发消息"的信号**——它只是"任务还在跑"。用户**没问**
+> 的时候，连续好几个 `[RUNNING]` 应该静默处理，只在前面提到的"重要进展"出现时才发。
+> 用户**问起**的时候（"咋样了"），手动 `aios code-helper poll`，把 `[RUNNING]` 摘要原样转过去。
 
 ## 子命令速查
 
@@ -212,37 +230,48 @@ aios code-helper start pomodoro-tool "用 Flask 写一个简单的番茄钟 Web 
 要求：
 1. 监听 5xxx 端口（先用 netstat / ss 探测一下哪个端口空闲，避免冲突 5000/5005/5006/5432/8000/22 之类常用端口和 AIOS 在用的端口）
 2. 主页有 25min 工作 + 5min 休息切换、开始/暂停/重置按钮、当前剩余时间
-3. 写一个 start.sh，里面 venv + pip install + nohup 后台启动，输出 PID 到 pomodoro.pid
+3. 写一个 start.sh，里面 venv + pip install + 用 nohup + disown 把服务**完全跟当前 shell 解耦**后台启动，输出 PID 到 pomodoro.pid。**这一步必须让 CC 自己的对话能正常结束**——不要前台阻塞跑服务，不要 wait
 4. 写一个 stop.sh，根据 pomodoro.pid kill
 5. README.md 说明怎么开启 / 怎么访问 / 怎么停
-6. 不要 sudo、不要碰 systemd、不要动其他端口" --timeout 1800 --json
+6. 服务跑起来后，用 curl 验证一次 / 路由能 200，**然后正常退出对话**（不要持续监控服务、不要进无限循环 tail 日志）。watcher 看到你 stop 了就会写 [DONE]
+7. 不要 sudo、不要碰 systemd、不要动其他端口" --timeout 1800 --json
 ```
+
+> ⚠️ **CC 启动后台服务的正确姿势**：必须 `nohup ... > log 2>&1 &` + `disown` 让服务进程
+> 跟 CC 自己的 shell 完全解耦。否则 CC 不敢退出对话（怕一退服务就死），结果 watcher 就
+> 一直 running，poll 永远 `[RUNNING]`。在 prompt 里**显式写**这一段。
 
 立即给用户反馈：
 
 > 📤 已派给 Claude Code 处理 task=`pomodoro-tool`（pid 13524）
 > 工作目录：`~/aios-cc-workspace/pomodoro-tool/`
-> 预计 3-8 分钟。我每分钟会跟你同步一次进度，完成 / 失败 / 需要你确认时会立刻告诉你。
+> 预计 3-8 分钟。我会在后台每 2 分钟看一次进度，**只在有重要进展 / 完成 / 失败 / 需要你确认时**才打扰你。
 >
 > 📎 CC task: **pomodoro-tool**
 
-注册 cron `*/1 * * * *` 回调（见 Step 2）。
+注册 cron `*/2 * * * *` 回调（见 Step 2）。
 
-**Round 2**（一分钟后 cron 触发）：
+**Round 2**（2 分钟后 cron 触发）：
 
 ```bash
 aios code-helper poll pomodoro-tool
 ```
 
-输出 `[RUNNING]`，把摘要原样转给用户：
+输出 `[RUNNING]` —— 心里默念："上次没有任何文件，这次写了 app.py + requirements.txt，
+**有重要进展**，转给用户"：
 
-> 🔄 进度（pomodoro-tool · 92s）
+> 🔄 进度（pomodoro-tool · 118s）
 >
 > 已写：app.py、requirements.txt
 > 当前在做：Bash `pip install Flask`
 > CC 反馈：正在搭后端框架 ……
 
-**Round N**（第 N 分钟，cron 又触发）：
+**Round 3**（4 分钟时 cron 又触发）：
+
+`poll` 又是 `[RUNNING]`，比对一下：files 还是 2 个、最近 tool 还是 Bash、final_text_preview
+没大变化 → **没有重要进展，沉默**。不发消息、cron 保留、等下一次。
+
+**Round N**（第 N 次 cron 触发）：
 
 ```bash
 aios code-helper poll pomodoro-tool
@@ -281,10 +310,15 @@ aios code-helper poll <task-name>
 | `[FAILED] claude exited 1` | claude 内部失败 | `aios code-helper logs <task> --tail 100` 看 stderr；多半是认证 / 网络 |
 | CC 在 final_text 说"我无法 / 不允许 ..." | 撞到了上面"安全边界"硬约束 | 改任务描述绕开（让 CC 在 cwd 内写脚本而不是直接改 AIOS 源码） |
 
-## 四条铁律
+## 六条铁律
 
 1. **永远用 `start` + cron poll**，不要再用旧的同步 `--task X "desc"` 形式
 2. **start 之后立刻给用户反馈**：派出去了 / 估计多久 / 会按节奏汇报
-3. **延续任务必须用同一 `<task-name>`**，不同 = 失忆从头 = 浪费用户时间和钱
-4. **写代码 / 改文件 / 跑脚本默认走这里** — 自己写一段超过 5-10 行的代码塞回复，
+3. **cron 用 `*/2 * * * *`**（≈100s）—— 不要 `*/1`。`[RUNNING]` 默认沉默，只在有"重要
+   进展"或 `[DONE]/[FAILED]/[NEEDS_CONFIRMATION]` 时才打扰用户
+4. **绝不手动 `kill <watcher_pid>`**。watcher 一直 alive 是正常的；中止用 `aios code-helper
+   cancel`，且仅在用户说"算了别做了"时才用。**端口监听 ≠ 任务完成，唯一信号是 poll 的
+   `[DONE]/[FAILED]` 标记**
+5. **延续任务必须用同一 `<task-name>`**，不同 = 失忆从头 = 浪费用户时间和钱
+6. **写代码 / 改文件 / 跑脚本默认走这里** — 自己写一段超过 5-10 行的代码塞回复，
    就是在烧主 API 的钱；除非用户明确说"你直接给我贴代码"，否则委托 CC
