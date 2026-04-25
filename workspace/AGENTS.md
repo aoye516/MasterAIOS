@@ -178,13 +178,27 @@ aios code-helper start <kebab-case-name> "<完整任务描述>" [--timeout 1800]
 #### 关键不变量（避免之前 3d-rubiks-cube 那种乌龙）
 
 - **watcher 一直 alive 是正常的**。`status=running` + `pid` 还在 → CC 还在干活，可能在写
-  代码、跑测试、想问题。绝不要手动 `kill <pid>`。需要中止用 `aios code-helper cancel`，
-  且仅在用户**明确说**"算了别做了"时才用。
+  代码、跑测试、想问题。绝不要手动 `kill <pid>`。
 - **端口监听 ≠ 任务完成**。CC 经常先启动 web server 再继续写 README / 测试 / 总结。
   判断完成的**唯一信号**是 `aios code-helper poll` 输出里出现 `[DONE]` 或 `[FAILED]`。
   只看 `ps`、`netstat`、`curl` 都会误判，导致提前杀 watcher、用户拿不到完整结果。
 - **CC 部署后台服务时，prompt 里要明确要求"用 `nohup ... &` + `disown` 解耦，验证一次
   路由后正常退出"**。否则 CC 不敢退出，watcher 永远 running。
+
+#### `cancel` 的边界（默认让 watcher 自然走完）
+
+watcher 的天然终点是 `[DONE]` / `[FAILED]`，**主动 cancel 只在极少场景下做**：
+
+- ✅ 用户**明说**"算了 / 撤销 / 别做了 / 停掉那个 cc 任务 / 取消" → `aios code-helper cancel <task>`
+- ✅ 同名 task 用户想**推翻重来**（旧的没完成，描述完全不一样） → `cancel` 旧的再 `start`
+- ❌ 用户开**新话题** → 用新 task name `start` 即可，**旧 task 不要 cancel**，让它跑完；多 task 并存是正常的
+- ❌ 用户问"咋样了" → 手动 `poll` 一次，**不要 cancel**
+- ❌ `[RUNNING]` 半天没新进展 → 默认沉默，**不要 cancel**
+- ❌ 端口活了 / 服务起来了 → **不要 cancel**，等 `[DONE]`
+
+> 心法：watcher 不是常驻服务，是**单次任务的监工**。任务做完它自己会走。task name +
+> session 历史才是"常驻"的——同名 `start` 自动 `--resume` 续接 CC 的记忆。我**不能**也
+> **不需要**让 CC 实例长开；只需要**不要主动打断**。
 
 #### 用户没等到 cron 又来催"咋样了"
 

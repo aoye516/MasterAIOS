@@ -96,10 +96,33 @@ cron schedule:
 **关键不变量**：
 - watcher 进程（runner.py）会一直 alive 直到 `claude` 自己退出。看到 `pid` 还在、status 还
   是 `running` 是**完全正常**的——CC 可能正在写代码、跑测试、想问题。**绝不要手动**
-  `kill <pid>` watcher。如果用户明确说"算了别做了"，用 `aios code-helper cancel <task>`。
+  `kill <pid>` watcher。
 - **端口监听 ≠ 任务完成**。CC 经常在任务里启动一个 web server / 后台进程然后继续写
   README 或测试。判断完成的**唯一标准是 `aios code-helper poll` 输出里出现 `[DONE]` 或
   `[FAILED]`**。只看 `ps`、`netstat`、`curl` 都会误判。
+
+## 什么时候 cancel watcher（很少 —— 默认让它跑完）
+
+CC 任务的天然终点是 watcher 自己退出（`[DONE]` / `[FAILED]`）。**主动 `cancel` 只在
+极少数情况下做**：
+
+| 场景 | 处理 |
+|---|---|
+| 用户**明说**"算了 / 撤销 / 别做了 / 停掉那个 cc 任务 / 取消" | `aios code-helper cancel <task>` |
+| 同名 task 用户想**推翻重来**（旧的还没完成，描述完全不一样） | `cancel` 旧的 → `start` 同名（清掉 session 续接，从头） |
+| watcher 卡住几小时无任何新事件 | 极少。先 `logs <task> --tail 100` 看原因；1800s 超时本身也会兜底 |
+
+**不要** cancel 的场景（避免重蹈 3d-rubiks-cube 那次乌龙）：
+
+- ❌ 端口活了 / 服务起来了 → CC 可能还在写 README / 跑测试
+- ❌ 用户开了**新话题** → 用新 task name `start` 即可，旧 task 让它自己跑完，多 task 并存正常
+- ❌ `[RUNNING]` 半天没新进展 → 默认沉默就行，CC 可能在想问题
+- ❌ 用户只是问"咋样了" → 手动 `poll` 一次报进度
+- ❌ watcher pid 还在、status 还是 `running` → 这就是它该有的样子，让它继续
+
+> 心法：**watcher 不是常驻服务，是单次任务的监工**。任务做完了它自己会走。
+> task name + session 历史才是"常驻"的——同名 `start` 自动续接 CC 的记忆。
+> 你**不能**也**不需要**让 CC 实例长开；只需要**不要主动打断**。
 
 ### Step 3 — cron 触发时 poll，按标记决定
 
