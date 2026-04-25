@@ -112,17 +112,63 @@ def _format_age(ts: float | None, now: float | None = None) -> str:
     return f"{int(delta // 3600)}h ago"
 
 
-def _render_poll(status: dict | None, result: dict | None) -> str:
+def _poll_snapshot(status: dict) -> dict:
+    """Snapshot of the fields we use to decide if anything 'meaningful' changed."""
+    import hashlib
+    files = status.get("files_written") or []
+    text = (status.get("final_text_preview") or "").strip()
+    tool_recent = status.get("tool_calls_recent") or []
+    tool_kinds = sorted({(tc.get("name") or "?") for tc in tool_recent})
+    return {
+        "status": status.get("status"),
+        "files_count": len(files),
+        "tool_calls_count": status.get("tool_calls_count") or 0,
+        "tool_kinds": tool_kinds,
+        "text_hash": hashlib.sha1(text.encode("utf-8")).hexdigest() if text else "",
+        "elapsed_s": status.get("elapsed_s") or 0,
+    }
+
+
+def _has_meaningful_progress(prev: dict | None, curr: dict) -> tuple[bool, str]:
+    """Return (is_meaningful, reason)."""
+    if prev is None:
+        return True, "first poll"
+    if prev.get("status") != curr.get("status"):
+        return True, f"status {prev.get('status')} → {curr.get('status')}"
+    if curr["files_count"] > prev["files_count"]:
+        return True, f"+{curr['files_count'] - prev['files_count']} 文件"
+    if curr["tool_calls_count"] > prev["tool_calls_count"]:
+        new_kinds = set(curr["tool_kinds"]) - set(prev.get("tool_kinds", []))
+        if new_kinds:
+            return True, f"new tool kinds: {','.join(sorted(new_kinds))}"
+    if curr["text_hash"] and curr["text_hash"] != prev.get("text_hash"):
+        return True, "CC 反馈有更新"
+    # 5-minute heartbeat: 0-5 sleep, then notify at 5/10/15/20/25/30...
+    prev_bucket = int((prev.get("elapsed_s") or 0) // 300)
+    curr_bucket = int((curr.get("elapsed_s") or 0) // 300)
+    if curr_bucket > prev_bucket and curr_bucket > 0:
+        return True, f"心跳：跑了 {curr_bucket * 5} 分钟"
+    return False, "no meaningful change"
+
+
+def _render_poll(
+    status: dict | None,
+    result: dict | None,
+    *,
+    last_snapshot: dict | None = None,
+) -> tuple[str, str]:
     """Friendly progress / final-state summary for `aios code-helper poll`.
 
-    The Master Agent reads this output verbatim and forwards it to the user.
-    Markers `[DONE]` / `[FAILED]` / `[CANCELLED]` / `[NEEDS_CONFIRMATION]`
-    let Master decide whether to keep the cron poll running, cancel it,
-    or escalate back to the user for input.
+    Returns (rendered_text, marker) where marker is one of:
+    DONE / FAILED / CANCELLED / NEEDS_CONFIRMATION / PROGRESS / QUIET / UNKNOWN.
+
+    The Master Agent reads the rendered text verbatim and forwards it to the user
+    only when marker != QUIET. The CLI does the diff itself; Master no longer has
+    to (unreliably) judge "is there meaningful progress".
     """
     import time as _t
     if status is None:
-        return "❓ [UNKNOWN] task 不存在或还没启动 (no _run/status.json)"
+        return "❓ [UNKNOWN] task 不存在或还没启动 (no _run/status.json)", "UNKNOWN"
 
     task = status.get("task", "?")
     state = status.get("status", "?")
@@ -139,17 +185,34 @@ def _render_poll(status: dict | None, result: dict | None) -> str:
 
     # Marker line — Master scans for these to drive cron lifecycle.
     if state == "done":
-        marker = "✅ [DONE]"
+        marker = "DONE"
+        marker_line = "✅ [DONE]"
     elif state == "failed":
-        marker = "❌ [FAILED]"
+        marker = "FAILED"
+        marker_line = "❌ [FAILED]"
     elif state == "cancelled":
-        marker = "⛔ [CANCELLED]"
+        marker = "CANCELLED"
+        marker_line = "⛔ [CANCELLED]"
     elif needs:
-        marker = "❓ [NEEDS_CONFIRMATION]"
+        marker = "NEEDS_CONFIRMATION"
+        marker_line = "❓ [NEEDS_CONFIRMATION]"
     else:
-        marker = "🔄 [RUNNING]"
+        # Running — diff against last snapshot to decide PROGRESS vs QUIET.
+        curr_snap = _poll_snapshot(status)
+        is_progress, reason = _has_meaningful_progress(last_snapshot, curr_snap)
+        if is_progress:
+            marker = "PROGRESS"
+            marker_line = f"🔄 [PROGRESS] ({reason})"
+        else:
+            # Compact one-line QUIET output — Master sees this and stays silent.
+            return (
+                f"🤫 [QUIET] task={task}  elapsed={int(elapsed)}s  "
+                f"files={len(files)}  tools={tool_n}  "
+                f"(no meaningful change since last poll — DO NOT notify the user)",
+                "QUIET",
+            )
 
-    lines = [f"{marker} task={task}  status={state}  elapsed={int(elapsed)}s"
+    lines = [f"{marker_line} task={task}  status={state}  elapsed={int(elapsed)}s"
              + (f"  resumed={resumed}" if resumed else "")]
 
     if cost is not None or duration_ms is not None:
@@ -196,7 +259,7 @@ def _render_poll(status: dict | None, result: dict | None) -> str:
                 if len(ft) > 1200:
                     lines.append(f"... (+{len(ft)-1200} chars, see _run/result.json)")
 
-    return "\n".join(lines)
+    return "\n".join(lines), marker
 
 
 async def _cmd_code_helper(args: argparse.Namespace) -> int:
@@ -251,17 +314,35 @@ async def _cmd_code_helper(args: argparse.Namespace) -> int:
         print(json.dumps(s, ensure_ascii=False, indent=2))
         return 0
 
-    # ---- poll: friendly progress + DONE/FAILED/CANCELLED/NEEDS_CONFIRMATION marker ----
+    # ---- poll: friendly progress + DONE/FAILED/CANCELLED/NEEDS_CONFIRMATION/PROGRESS/QUIET ----
     if sub == "poll":
         s = task_status(args.task)
         r = task_result(args.task) if (s and s.get("status") == "done") else None
-        text = _render_poll(s, r)
+        # Read previous snapshot for diff (if any), then render, then save new snapshot.
+        run_dir = Path.home() / "aios-cc-workspace" / args.task / "_run"
+        last_snap_path = run_dir / "last_poll.json"
+        last_snap = None
+        if last_snap_path.exists():
+            try:
+                last_snap = json.loads(last_snap_path.read_text(encoding="utf-8"))
+            except Exception:
+                last_snap = None
+        text, marker = _render_poll(s, r, last_snapshot=last_snap)
+        # Always update snapshot so the next poll diffs against the fresh baseline.
+        if s is not None and run_dir.exists():
+            try:
+                last_snap_path.write_text(
+                    json.dumps(_poll_snapshot(s), ensure_ascii=False),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
         if args.json:
-            print(json.dumps({"status": s, "result": r, "rendered": text},
+            print(json.dumps({"status": s, "result": r, "rendered": text, "marker": marker},
                              ensure_ascii=False, indent=2))
         else:
             print(text)
-        # exit code: 0 if a terminal state, 2 if running, 1 if missing
+        # exit code: 0 terminal, 2 running (PROGRESS or QUIET), 1 missing
         if s is None:
             return 1
         return 0 if s.get("status") in ("done", "failed", "cancelled") else 2
@@ -273,7 +354,8 @@ async def _cmd_code_helper(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps({"status": s, "result": r}, ensure_ascii=False, indent=2))
         else:
-            print(_render_poll(s, r))
+            text, _marker = _render_poll(s, r)
+            print(text)
         return 0 if s and s.get("status") == "done" else 1
 
     # ---- cancel: SIGTERM the watcher ----

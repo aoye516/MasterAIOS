@@ -160,20 +160,41 @@ aios code-helper start <kebab-case-name> "<完整任务描述>" [--timeout 1800]
 **3) 注册 2 分钟一次的 cron poll 回调**（`*/2 * * * *`，≈100s。**不要用 `*/1`**——
 之前每分钟轰炸用户被反馈太频繁；2 分钟是标准 cron 粒度里最接近 100 秒的）：
 
-用 nanobot 的 `cron` 工具 schedule 一条 `*/2 * * * *` 的任务，message 写：
+`aios code-helper poll` **CLI 自带 diff 检测**。LLM 不再需要自己判断"是否有重要进展"。
+只要看输出**第一行的 marker** 行事，**6 个 marker 5 个动作**：
 
-> 【CC poll · `<task-name>`】运行 `aios code-helper poll <task-name>`，根据输出判断**是否值得打扰用户**：
-> - `[DONE]` → 必须转给用户 + 调用 cron remove 取消这条 cron
-> - `[FAILED]` / `[CANCELLED]` → 必须转给用户 + cron remove
-> - `[NEEDS_CONFIRMATION]` → 必须把 CC 在问的问题转给用户，cron 保留；用户回复后用
->   `aios code-helper start <task-name> "<用户的回复>"` 续接
-> - `[RUNNING]` → **默认沉默**。心里跟上一次轮询比一比，只在出现下面任一**重要进展**时
->   才转给用户：(a) 新写了文件 (b) 出现新类别的工具调用 (c) CC final_text_preview 有
->   实质性更新 (d) 跑了 > 5 分钟（每 5 min 同步一次"还在跑"就够了）。
->   否则**什么都不发**、cron 保留、下次再看。
+| marker | 我要做什么 |
+|---|---|
+| `[QUIET]` | **立刻退出本轮 loop**。不发消息、不调 channel 工具、不再推理。cron 保留。 |
+| `[PROGRESS]` | 把整段输出原样转给用户。cron 保留。 |
+| `[DONE]` | 把整段输出原样转给用户 + `cron remove` 这条任务。 |
+| `[FAILED]` / `[CANCELLED]` | 把整段输出原样转给用户 + `cron remove`。 |
+| `[NEEDS_CONFIRMATION]` | 把整段输出原样转给用户（CC 在问问题）；cron 保留；等用户回复后用 `aios code-helper start <task> "<回复>"` 续接。 |
+
+cron message 模板（**直接拷贝这段进去**）：
+
+```
+【CC poll · <task-name>】
+1. exec: aios code-helper poll <task-name>
+2. 看输出第一行的 marker：
+   - [QUIET]              → 立刻 break，什么都不做，本轮 loop 结束
+   - [PROGRESS] (...)     → 把整段输出原样发给用户
+   - [DONE]               → 整段输出发给用户 + cron remove 这条
+   - [FAILED]/[CANCELLED] → 整段输出发给用户 + cron remove
+   - [NEEDS_CONFIRMATION] → 整段输出发给用户，cron 保留
+3. **看到 [QUIET] 就停**，不要总结、不要解释、不要"我帮你看一眼"——这些都是噪音
+```
 
 **这条 cron 必须在每个 `start` 之后立刻注册。** 看到 `[DONE]/[FAILED]/[CANCELLED]`
 就 cron remove，不要让它一直 poll 已完成任务。
+
+> CLI diff 规则（你不用记，但好奇可以看）：上次 poll 起，**任一**满足 → `[PROGRESS]`，
+> 否则 → `[QUIET]`：
+> - 状态变了（running → done/failed/...）
+> - files_written 数量增加
+> - tool_calls_count 增加且出现新工具种类
+> - CC 的 final_text_preview 有变化
+> - elapsed 跨过 5min 整数关口（5/10/15/20...） — 心跳兜底
 
 #### 关键不变量（避免之前 3d-rubiks-cube 那种乌龙）
 
@@ -213,7 +234,7 @@ aios code-helper poll <task-name>
 | 命令 | 用途 |
 |---|---|
 | `aios code-helper start <task> "<prompt>" --json` | 派任务，毫秒返回 |
-| `aios code-helper poll <task>` | **主要工作命令**：友好进度 + `[DONE]/[FAILED]/[NEEDS_CONFIRMATION]/[RUNNING]` 标记 |
+| `aios code-helper poll <task>` | **主要工作命令**：CLI 自带 diff，输出 `[QUIET]/[PROGRESS]/[DONE]/[FAILED]/[CANCELLED]/[NEEDS_CONFIRMATION]` 之一 |
 | `aios code-helper status <task> --json` | 原始 status.json |
 | `aios code-helper result <task> --json` | 完成后的 result.json |
 | `aios code-helper logs <task> --tail 50` | 看原始 stream-json（debug） |

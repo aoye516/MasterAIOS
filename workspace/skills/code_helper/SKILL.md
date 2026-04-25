@@ -71,27 +71,39 @@ aios code-helper start <task-name> "<完整任务描述>" [--timeout 1800] --jso
 > 工作目录在服务器 `~/aios-cc-workspace/pomodoro-tool/`
 > 估计 3-8 分钟。我会在后台每 2 分钟看一次进度，**只在有重要进展 / 完成 / 失败 / 需要你确认时**才打扰你。
 
-**然后立即用 `cron` 工具注册一个每 2 分钟一次的 poll 回调**（`*/2 * * * *` ≈ 100s，是
-标准 cron 粒度里最接近 100 秒的；不要用更频繁的 `*/1`，会让我焦虑、过度诊断、瞎介入）：
+**然后立即用 `cron` 工具注册一个每 2 分钟一次的 poll 回调**（`*/2 * * * *` ≈ 100s，
+标准 cron 粒度里最接近 100 秒的）。**`aios code-helper poll` 的 CLI 已经自带 diff 检测**，
+LLM 不再需要自己判断"是否有重要进展"——只要看输出第一行的 marker 就够了：
 
 ```text
 cron schedule:
   expression:  */2 * * * *
-  message:     【CC poll · pomodoro-tool】运行 `aios code-helper poll pomodoro-tool`，
-               根据输出判断是否值得打扰用户：
-               • [DONE] / [FAILED] / [CANCELLED] → 必须转给用户 + cron remove
-               • [NEEDS_CONFIRMATION] → 必须转给用户（把 CC 在问的问题转过去），cron 保留；
-                 用户回复后用 `aios code-helper start pomodoro-tool "<用户的回复>"` 续接
-               • [RUNNING] → 心里默默对比上一次轮询，**只在有"重要进展"时**才转给用户：
-                 - 新写了文件 (files_written 增加)
-                 - 新跑了一类不同的工具 (出现新的 Bash/Write/Edit 类别)
-                 - CC 的 final_text_preview 有实质性更新（不是空 / 不是和上次相同）
-                 - 跑了 > 5 分钟还没完成（每 5 min 同步一次"还在跑，已 X 分钟"就够了）
-                 否则**沉默**——不发消息、不调任何工具、cron 保留，下次再看。
-                 用户没问起的"心跳式"汇报是噪音，他不喜欢。
+  message:     【CC poll · pomodoro-tool】
+               1. exec: `aios code-helper poll pomodoro-tool`
+               2. 看输出**第一行**的 marker，按下表处理，**不要自己加戏**：
+
+                  • [QUIET]              → **立刻退出，什么都不做**。不发消息、不调任何
+                                           频道工具、不再继续推理。cron 保留，下次再看。
+                  • [PROGRESS] (...)     → 把整段输出原样发给用户作为进度同步。cron 保留。
+                  • [DONE]               → 把整段输出原样发给用户。然后 cron remove 这条。
+                  • [FAILED] / [CANCELLED] → 把整段输出原样发给用户 + cron remove。
+                  • [NEEDS_CONFIRMATION] → 把整段输出原样发给用户（CC 在问问题）。cron 保留；
+                                           等用户回复后用 `aios code-helper start
+                                           pomodoro-tool "<用户的回复>"` 续接。
+
+               **看到 [QUIET] 就停**，不要解释、不要总结、不要"我帮你看一眼"——任何
+               channel 消息都是噪音。CLI 的 diff 已经判定这次没新进展。
 ```
 
 > 具体 cron 工具的参数语法看 nanobot 的 `cron` skill；上面是语义描述，不是字面命令。
+
+> CLI diff 规则（你不用记，但好奇可以看）：上次 poll 起，**任一**满足 → `[PROGRESS]`，
+> 否则 → `[QUIET]`。
+> - 状态变了（running → done/failed/...）
+> - files_written 数量增加
+> - tool_calls_count 增加且出现新工具种类
+> - CC 的 final_text_preview 有变化（hash 不同）
+> - elapsed 跨过 5min 整数关口（5/10/15/20...） — 心跳兜底
 
 **关键不变量**：
 - watcher 进程（runner.py）会一直 alive 直到 `claude` 自己退出。看到 `pid` 还在、status 还
@@ -132,10 +144,11 @@ CC 任务的天然终点是 watcher 自己退出（`[DONE]` / `[FAILED]`）。**
 aios code-helper poll <task-name>
 ```
 
-就会拿到一段**人 / Master 双友好的进度摘要**，例如运行中：
+就会拿到一段带 marker 的输出。CLI 自动 diff，**有进展是 `[PROGRESS]`，没进展是
+`[QUIET]`**。例如有进展时：
 
 ```
-🔄 [RUNNING] task=pomodoro-tool  status=running  elapsed=92s
+🔄 [PROGRESS] (+2 文件) task=pomodoro-tool  status=running  elapsed=92s
 📁 已写文件 (4): app.py, requirements.txt, start.sh, index.html
 🔧 工具调用 7 次
    · Write: index.html  (1s ago)
@@ -143,6 +156,12 @@ aios code-helper poll <task-name>
    · Edit: app.py  (35s ago)
 💬 CC 最新反馈:
    正在创建前端模板，包含番茄钟主界面...
+```
+
+没新进展时（这种就**不要发给用户**）：
+
+```
+🤫 [QUIET] task=pomodoro-tool  elapsed=148s  files=4  tools=7  (no meaningful change since last poll — DO NOT notify the user)
 ```
 
 完成时：
@@ -161,7 +180,7 @@ aios code-helper poll <task-name>
 ... 完整 final_text ...
 ```
 
-需要确认时（CC 在 final_text 里问了问题）：
+需要确认时（CC 在 final_text 里问了问题，这种**必须**转发用户）：
 
 ```
 ❓ [NEEDS_CONFIRMATION] task=pomodoro-tool  status=running  elapsed=180s
@@ -183,16 +202,17 @@ aios code-helper poll <task-name>
 > **看到 `[DONE]` / `[FAILED]` / `[CANCELLED]` 就 cron remove 那条回调**，否则
 > 它会一直 poll 一个已完成任务，浪费每 2 分钟一次的执行。
 
-> **`[RUNNING]` 不是"必须给用户发消息"的信号**——它只是"任务还在跑"。用户**没问**
-> 的时候，连续好几个 `[RUNNING]` 应该静默处理，只在前面提到的"重要进展"出现时才发。
-> 用户**问起**的时候（"咋样了"），手动 `aios code-helper poll`，把 `[RUNNING]` 摘要原样转过去。
+> **`[QUIET]` = 静默退出**。CLI 已经替你判断过没有重要进展，不要二次推理、不要发"还在
+> 跑哦"之类的消息。用户**主动问**"咋样了"的时候，是用户层 message 触发的新对话循环——
+> 那一次手动 `aios code-helper poll` 后无论是 `[QUIET]` 还是 `[PROGRESS]`，都把摘要
+> 转给用户（用户问起就要回答；只有**自动 cron** 触发时才静默）。
 
 ## 子命令速查
 
 | 命令 | 用途 |
 |---|---|
 | `aios code-helper start <task> "<prompt>" [--timeout SEC] [--json]` | 派任务，毫秒级返回 |
-| `aios code-helper poll <task>` | 友好进度摘要 + `[DONE]/[FAILED]/[NEEDS_CONFIRMATION]/[RUNNING]` 标记。**主要工作命令** |
+| `aios code-helper poll <task>` | 友好进度摘要 + 自带 diff 的 marker：`[DONE]/[FAILED]/[CANCELLED]/[NEEDS_CONFIRMATION]/[PROGRESS]/[QUIET]`。**主要工作命令** |
 | `aios code-helper status <task> [--json]` | 原始 status.json（debug 用，poll 已经够看） |
 | `aios code-helper result <task> [--json]` | 完成后的完整 result.json（含完整 final_text） |
 | `aios code-helper logs <task> [--tail 50]` | 看原始 stream-json 日志（debug 用） |
@@ -280,8 +300,7 @@ aios code-helper start pomodoro-tool "用 Flask 写一个简单的番茄钟 Web 
 aios code-helper poll pomodoro-tool
 ```
 
-输出 `[RUNNING]` —— 心里默念："上次没有任何文件，这次写了 app.py + requirements.txt，
-**有重要进展**，转给用户"：
+输出 `[PROGRESS] (+2 文件)` → CLI 已经告诉你有进展，把整段输出原样转给用户：
 
 > 🔄 进度（pomodoro-tool · 118s）
 >
@@ -291,8 +310,7 @@ aios code-helper poll pomodoro-tool
 
 **Round 3**（4 分钟时 cron 又触发）：
 
-`poll` 又是 `[RUNNING]`，比对一下：files 还是 2 个、最近 tool 还是 Bash、final_text_preview
-没大变化 → **没有重要进展，沉默**。不发消息、cron 保留、等下一次。
+`poll` 输出 `[QUIET]` → **立刻退出本轮 loop**。不发消息、不调任何 channel 工具、cron 保留。
 
 **Round N**（第 N 次 cron 触发）：
 
@@ -328,7 +346,7 @@ aios code-helper poll <task-name>
 | `task already running` | 上一次 start 还在跑 | `poll` 看进度，或 `cancel` 后重启 |
 | `claude CLI not in PATH` | claude CLI 没装 | `npm install -g @anthropic-ai/claude-code` |
 | `invalid task name` | task 名违反正则 | 改成 kebab-case（小写 + 短横线） |
-| poll 一直 `[RUNNING]` 几分钟没新进展 | CC 卡在某个工具 / 网络慢 | 看 `aios code-helper logs <task> --tail 30` 找原因；必要时 `cancel` 后用更细的 prompt 重启 |
+| poll 一直 `[QUIET]` 很多次 | CC 卡在某个工具 / 网络慢 / 在长任务里思考 | 至少等到一次 `[PROGRESS]` 心跳（5min 关口必触发）；还不动看 `aios code-helper logs <task> --tail 30` 找原因；必要时 `cancel` 后用更细的 prompt 重启 |
 | `[FAILED] runner timeout after 1800s` | 超过 30min 默认上限 | 重启同名 task（自动续接）+ 加 `--timeout 3600`；或者拆成更小任务 |
 | `[FAILED] claude exited 1` | claude 内部失败 | `aios code-helper logs <task> --tail 100` 看 stderr；多半是认证 / 网络 |
 | CC 在 final_text 说"我无法 / 不允许 ..." | 撞到了上面"安全边界"硬约束 | 改任务描述绕开（让 CC 在 cwd 内写脚本而不是直接改 AIOS 源码） |
@@ -337,8 +355,8 @@ aios code-helper poll <task-name>
 
 1. **永远用 `start` + cron poll**，不要再用旧的同步 `--task X "desc"` 形式
 2. **start 之后立刻给用户反馈**：派出去了 / 估计多久 / 会按节奏汇报
-3. **cron 用 `*/2 * * * *`**（≈100s）—— 不要 `*/1`。`[RUNNING]` 默认沉默，只在有"重要
-   进展"或 `[DONE]/[FAILED]/[NEEDS_CONFIRMATION]` 时才打扰用户
+3. **cron 用 `*/2 * * * *`**（≈100s）—— 不要 `*/1`。看 `poll` 第一行 marker 行事：
+   `[QUIET]` 立刻闭嘴退出；`[PROGRESS]/[DONE]/[FAILED]/[NEEDS_CONFIRMATION]` 才转发用户
 4. **绝不手动 `kill <watcher_pid>`**。watcher 一直 alive 是正常的；中止用 `aios code-helper
    cancel`，且仅在用户说"算了别做了"时才用。**端口监听 ≠ 任务完成，唯一信号是 poll 的
    `[DONE]/[FAILED]` 标记**
