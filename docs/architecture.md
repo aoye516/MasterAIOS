@@ -216,7 +216,7 @@ CLI 实现见 [`aios/cli.py`](../aios/cli.py)。每个子命令有对应 `worksp
 
 `workspace/config.json`：
 
-- `agents.defaults.provider` — 默认 LLM（当前 `siliconflow` + `deepseek-ai/DeepSeek-V4-Flash`）
+- `agents.defaults.provider` — 默认 LLM（当前 `siliconflow` + `deepseek-ai/DeepSeek-V3.2`）
 - `agents.defaults.timezone` — `Asia/Shanghai`
 - `agents.defaults.unifiedSession` — `true`（所有 channel 共享一个 session）
 - `channels.feishu` — appId/appSecret 走 `${ENV_VAR}` 占位
