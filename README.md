@@ -246,6 +246,23 @@ ssh root@<server> "cd /claude/aios && bash deploy/run_migrations.sh"
 
 Detailed conventions (including "always confirm before any auto-ssh deploys to prod") live in [`CLAUDE.md`](CLAUDE.md) §8.
 
+### 5.x Hot-swap the Master model (one liner)
+
+`agents.defaults.model` in `workspace/config.json` is now `${LLM_MODEL_MAIN}` — nanobot resolves it from the server `.env` at startup. `deploy/switch-model.sh` wraps the workflow with a hard SF preflight:
+
+```bash
+# show current model
+AIOS_REMOTE=root@<server> bash deploy/switch-model.sh --show
+
+# probe a candidate model on SiliconFlow (no config change, no restart)
+AIOS_REMOTE=root@<server> bash deploy/switch-model.sh --check deepseek-ai/DeepSeek-V4-Flash
+
+# actually swap: SF probe → patch .env → systemctl restart aios → verify active
+AIOS_REMOTE=root@<server> bash deploy/switch-model.sh deepseek-ai/DeepSeek-V3.2
+```
+
+The script fires a real `chat/completions` call against the target (10 s timeout). **Only HTTP 200 leads to a config change** — so a typo or a not-yet-released model can never take Master down. After restart it `systemctl is-active`s the service and dumps the last 20 log lines on failure.
+
 ---
 
 ## 6. Upgrading the upstream nanobot

@@ -242,6 +242,23 @@ ssh root@<server> "cd /claude/aios && bash deploy/run_migrations.sh"
 
 详细约定（包含"自动 ssh 部署生产前必须明确确认"）见 [`CLAUDE.md`](CLAUDE.md) §8。
 
+### 5.x 切换 Master 主模型（一行命令）
+
+`workspace/config.json` 里 `agents.defaults.model` 写的是 `${LLM_MODEL_MAIN}`，nanobot 启动时从服务器 `.env` 读环境变量。配合 `deploy/switch-model.sh` 实现一键切换 + 预检：
+
+```bash
+# 看当前生效的模型
+AIOS_REMOTE=root@<server> bash deploy/switch-model.sh --show
+
+# 只探测某模型在 SF 是否可用（不切、不重启）
+AIOS_REMOTE=root@<server> bash deploy/switch-model.sh --check deepseek-ai/DeepSeek-V4-Flash
+
+# 真切：先 SF 探测 → 改 .env → systemctl restart aios → 验 active
+AIOS_REMOTE=root@<server> bash deploy/switch-model.sh deepseek-ai/DeepSeek-V3.2
+```
+
+脚本会先对目标模型发一次真实 `chat/completions` 请求（10 s 超时）；**只有 HTTP 200 才会改配置**——避免切到拼错或 SF 还没开放的模型导致 Master 整个停摆。重启完会立刻 `systemctl is-active` 验证，不 active 直接 dump 最近 20 行日志。
+
 ---
 
 ## 6. 升级 nanobot 上游
